@@ -48,7 +48,39 @@ stale: N sessions
 notes: <one line on anything unusual>
 ```
 
-### 6. EXIT
+### 6. PRIORITIES CHECK-IN (biweekly)
+
+The Boss asked for a nudge every 14 days to review priorities.md. Do this check on every tick — it's a no-op most of the time.
+
+1. Check the modification time of `~/.claude/cos/priorities.md`:
+
+   ```bash
+   stat -f %m ~/.claude/cos/priorities.md     # macOS
+   ```
+
+   Convert to an ISO date and compute days since.
+
+2. If `days_since_modified < 14`: skip this step. Nothing to do.
+
+3. If `days_since_modified >= 14`: check whether there's already a recent nudge in the notifications table so you don't spam:
+
+   ```bash
+   sqlite3 ~/.claude/cos/fleet.db \
+     "SELECT COUNT(*) FROM notifications WHERE subject LIKE 'Priorities review%' AND created_at > datetime('now', '-14 days')"
+   ```
+
+   If the count is > 0: skip. A nudge is already outstanding.
+
+4. Otherwise, raise a normal-urgency notification:
+   ```bash
+   cos notify --urgency normal \
+     --subject "Priorities review due (stale N days)" \
+     --body "It's been N days since priorities.md was updated. Reply 'let's review priorities' in a Claude Code session and I'll walk you through the current list + open decisions."
+   ```
+
+When the Boss eventually engages in dialog mode about this, **actually do the walkthrough**: read priorities.md + the last ~30 entries of decisions.log, ask which stated priorities have drifted, whether new commitments deserve a line, whether anything should move to the "non-priorities" section. Update priorities.md inline. Touching the file resets the 14-day clock.
+
+### 7. EXIT
 
 When done, do not perform other tasks. Do not open a new conversation with the user. Just exit.
 
