@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec node "$HOME/.claude/cos/cli/dist/index.js" "$@"

@@ -1,0 +1,7 @@
+{
+  "repos": [
+    "owner/repo-1",
+    "owner/repo-2"
+  ],
+  "default_base_branch": "main"
+}

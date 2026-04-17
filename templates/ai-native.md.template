@@ -1,0 +1,29 @@
+# AI-Native Evaluations → Idea Backlog
+
+Pointers to per-repo AI-native evaluation docs. Each eval rates the codebase across 10 dimensions and has a "highest-leverage fix" column — those are pre-scoped PR-sized ideas waiting to be promoted.
+
+## Per-repo evals
+
+- **\<repo-1\>** — `<path to eval doc>`
+- **\<repo-2\>** — `<path to eval doc>`
+
+## Dimensions rated
+
+1. Agent entry points (CLAUDE.md, AGENTS.md, rules)
+2. Verifiability (smoke commands, test speed)
+3. Discoverability (conventions, predictable structure)
+4. Explicit contracts (shared types, schema enforcement)
+5. Context-efficient docs (focused, ADRs, no stale clutter)
+6. Repeatable workflows (.claude/skills, .claude/agents)
+7. Safety guardrails (allowlists, hooks, migration locks)
+8. Codebase hygiene (lint strictness, file size limits, cruft)
+9. Observability & repro (error tracking, metrics, repro harness)
+10. Environment & first-run (setup scripts, env.example completeness)
+
+## How COS uses this
+
+The **ai-native idea generator** (self-build item #6) reads these evals, scans the "highest-leverage fix" columns, and writes `ideas` rows with `source=generator:ai-native` and a confidence score. Each idea's title/description references the specific dimension and fix.
+
+## Cadence
+
+Re-run the eval quarterly. Diff against the prior eval — the delta is what shipped and what regressed.

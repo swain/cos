@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# COS cron tick wrapper — invoked by launchd every 15 minutes.
+# Runs `cos tick` (which invokes claude -p with the cron prompt) and logs output.
+
+set -o pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
+# nvm-installed node — add the active node bin to PATH
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  LATEST_NODE="$(ls -1 "$HOME/.nvm/versions/node" | sort -V | tail -1)"
+  if [[ -n "$LATEST_NODE" ]]; then
+    export PATH="$HOME/.nvm/versions/node/$LATEST_NODE/bin:$PATH"
+  fi
+fi
+
+LOGDIR="$HOME/.claude/cos/logs"
+mkdir -p "$LOGDIR"
+LOG="$LOGDIR/cron-$(date +%Y-%m-%d).log"
+
+{
+  echo "=================================================="
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] tick start"
+  cos tick
+  RC=$?
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] tick end rc=$RC"
+} >> "$LOG" 2>&1
+
+# Basic failure protection: if 5 consecutive ticks fail, try to raise a notification.
+FAIL_FILE="$LOGDIR/consecutive-fails"
+if [[ ${RC:-1} -ne 0 ]]; then
+  N=$(($(cat "$FAIL_FILE" 2>/dev/null || echo 0) + 1))
+  echo "$N" > "$FAIL_FILE"
+  if [[ $N -ge 5 ]]; then
+    cos notify --urgency urgent --subject "COS cron failing" --body "Cron has failed $N times in a row. Check $LOG." 2>/dev/null || true
+    echo 0 > "$FAIL_FILE"
+  fi
+else
+  echo 0 > "$FAIL_FILE"
+fi
+
+exit ${RC:-1}

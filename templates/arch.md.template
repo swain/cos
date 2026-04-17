@@ -1,0 +1,58 @@
+# Architecture
+
+_Committed locally (not to the cos repo) by default. Move to the cos repo if you want to share with teammates and there's nothing sensitive._
+
+## Topology
+
+_(Describe the layout: one repo vs monorepo-of-repos, service boundaries, ownership.)_
+
+## Service communication
+
+_(Inter-service protocols, auth, data flow.)_
+
+## Contracts / shared types
+
+_(Where shared schemas live, how changes propagate.)_
+
+## Auth patterns
+
+| Flow | Mechanism | Details |
+|---|---|---|
+|  |  |  |
+
+## Database
+
+_(Per-service DBs, migration tooling, conventions.)_
+
+## Invariants you care about
+
+- _(e.g., "service-per-DB isolation", "Zod at every boundary", "default branch is X not Y")_
+
+## Code style
+
+- _(Language-specific conventions, lint strictness, comment discipline.)_
+
+## Deployment
+
+| Service | Platform | IaC | Environments |
+|---|---|---|---|
+|  |  |  |  |
+
+## Observability
+
+- Metrics:
+- Logs:
+- Traces:
+- Errors (Sentry / Rollbar / etc.):
+
+## Recent AARs / incidents
+
+- _(Links to incident postmortems.)_
+
+## Known large services worth splitting
+
+- _(From your own evals.)_
+
+## Multi-repo task discipline
+
+- _(e.g., Read each involved repo's CLAUDE.md before touching it.)_
