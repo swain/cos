@@ -53,8 +53,8 @@ link_if_missing() {
   echo "    $dst → $src"
 }
 
-echo "==> Symlinking shareable COS files into $COS_DIR…"
-for f in design.md implementation-plan.md USING_COS.md system.md; do
+echo "==> Symlinking shareable COS files into ${COS_DIR}…"
+for f in design.md implementation-plan.md USING_COS.md system.md po.md; do
   link_if_missing "$REPO_ROOT/$f" "$COS_DIR/$f"
 done
 link_if_missing "$REPO_ROOT/prompts" "$COS_DIR/prompts"
@@ -63,7 +63,7 @@ link_if_missing "$REPO_ROOT/cli" "$COS_DIR/cli"
 link_if_missing "$REPO_ROOT/launchd" "$COS_DIR/launchd"
 
 echo
-echo "==> Symlinking slash commands into $COMMANDS_DIR…"
+echo "==> Symlinking slash commands into ${COMMANDS_DIR}…"
 for f in fleet.md enqueue.md cos.md groom.md dispatch.md; do
   link_if_missing "$REPO_ROOT/commands/$f" "$COMMANDS_DIR/$f"
 done
@@ -119,7 +119,7 @@ echo "==> Running cos init…"
 
 # ----- Render launchd plist -----
 echo
-echo "==> Rendering launchd plist as $LABEL…"
+echo "==> Rendering launchd plist as ${LABEL}…"
 PLIST_OUT="$LAUNCHD_DIR/$LABEL.plist"
 sed \
   -e "s|{{LABEL}}|$LABEL|g" \

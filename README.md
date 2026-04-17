@@ -146,3 +146,57 @@ MIT (add a LICENSE file).
 
 MVP. Self-build queue seeds 11 follow-up work items that extend COS via its own queue:
 Sentry / ClickUp / Calendar / Grafana / Slack collectors, idea generator (ai-native + diff-driven), weekly review, worker lifecycle polish, planning/chunking, post-meeting TODO extraction.
+
+## Known rough edges
+
+Tracked here so they survive the handoff. Fix them via work items in the queue.
+
+### 1. `claude` binary path is hardcoded
+
+`cli/src/util.ts` defines `CLAUDE_BIN = ~/.local/bin/claude`. `bin/spawn-worker` references the same path. If Claude Code's install location ever moves (e.g., Homebrew install, updated installer), you have two places to update — then rebuild the CLI.
+
+**Fix via work item:** detect `claude` on `PATH` at runtime with a fallback to the hardcoded path. Low priority — the path is stable in practice.
+
+### 2. `pr-merged` signal not collected
+
+`gh search prs --merged=>=DATE` is not a supported flag combination in the current `gh` CLI (version 2.86 at build time). The corresponding block in `cli/src/collectors/github.ts` was removed and left as a comment. As a result, merged PRs do not generate `pr-merged` signals; worktree cleanup after merge is not automated.
+
+**Fix via work item:** use per-repo `gh pr list --state=merged --json=mergedAt…` in a loop over `watched-repos.json`, filter by mergedAt locally. Or use the REST API directly. Medium priority (cleanup hygiene, not critical).
+
+### 3. `~/Library/LaunchAgents/*.plist` is a rendered copy, not a symlink
+
+launchd requires a real file at that path — symlinks are not reliable there. `install.sh` renders the template (`launchd/com.cos.cron.plist.template`) into place with your paths substituted. **If you edit the template, re-run `install.sh`** (it will overwrite the rendered plist). After re-rendering, reload:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+launchctl kickstart gui/$(id -u)/<label>
+```
+
+### 4. `install.sh` is not yet end-to-end verified on a fresh machine
+
+It was verified idempotent on the original developer's machine (where files were manually placed), and via a clean-room dry-run with `HOME=/tmp/...` (see `install.sh`'s idempotency tests). Real teammates adopting the system are the true test — expect to find 1–2 edge cases.
+
+**Known gotchas:**
+
+- The clean-room run requires `claude` to be discoverable at `$HOME/.local/bin/claude` (symlink or real binary). If your install puts `claude` elsewhere, edit the `claude` prereq check in `install.sh` or pre-populate `~/.local/bin/claude`.
+- `npm install` runs inside `cli/` using the invoking user's npm cache at `$HOME/.npm`. On a truly fresh machine, this is slow on first run.
+- The script edits `~/.zshrc`. If you use bash or fish, copy the PATH export manually.
+
+### 5. Launchd plist label is per-user
+
+The installer renders the plist with label `com.<whoami>.cos.cron`. Two people on the same machine (unusual but possible) would collide. Override via `COS_LAUNCHD_LABEL=com.foo.cos.cron ./install.sh` if needed.
+
+### 6. Worker sequential-gating is enforced by the prompt, not mechanically
+
+The worker prompt tells workers to stop at PR-open and only respond to CI/review comments. Nothing in the dispatch logic prevents two workers from being assigned to the same work item if the auto-dispatch guards are bypassed with `--force`. In practice this hasn't caused issues, but it's a soft rule enforced by the prompt.
+
+**Fix via work item:** `cos dispatch` hard-checks `sessions` for any open session on the same work item before creating a new one. (Already partially implemented — tighten and test.)
+
+### 7. `dotfiles-sync` command is stale
+
+The `cos dotfiles-sync` subcommand was written for an earlier plan that committed COS into the user's dotfiles repo. COS moved to a standalone repo; the subcommand is now dead code. Leave it for now (harmless), or remove it in a cleanup PR.
+
+### 8. No backup strategy for local-only files
+
+`team.md`, `priorities.md`, `decisions.log`, `fleet.db` are all local-only and never committed. If your laptop dies, you lose them. Back up `~/.claude/cos/` separately (Time Machine, iCloud Drive, or a private encrypted git repo with `git-crypt`).
