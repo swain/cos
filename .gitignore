@@ -1,3 +1,4 @@
 cli/node_modules/
 cli/dist/
 .DS_Store
+.remember/

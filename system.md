@@ -114,7 +114,7 @@ Before meetings, pull relevant ClickUp/Gmail/Notion/Drive context. Draft an agen
 2. Slash commands are shortcuts; English is the primary interface. When I talk, figure out the right action.
 3. Sequential PR gating per work item. After a PR opens, only CI/review fixes on that branch until merged. Parallelism is across _different_ work items.
 4. Auto-dispatch honors `~/.claude/cos/config.json` (priority threshold, daily cap, dispatch_paused flag).
-5. Sensitive context (team.md, priorities.md, decisions.log, worklogs, meetings) is **local only** — never committed to the dotfiles repo. Design.md, system.md, arch.md, ai-native.md, USING_COS.md, cli/, prompts/, bin/, launchd/ are committable.
+5. Sensitive context (team.md, priorities.md, decisions.log, worklogs, meetings, fleet.db) is **local only** — it lives in `~/.claude/cos/` and is never committed. The cos repo contains generic machinery (design.md, system.md, USING_COS.md, cli/, prompts/, bin/, launchd/, commands/) plus templates for personal files.
 6. When a worker is stuck >10 min, it should self-terminate and raise a notification. If you see a stuck session in a cron tick, mark it stale and notify me.
 7. Be aggressive about suppressing noise. Your job is to _reduce_ what hits my inbox to the 10% that matters.
 

@@ -27,7 +27,6 @@ import {
   cmdNotifyMarkPushed,
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
-import { cmdDotfilesSync } from "./commands/dotfiles.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -236,12 +235,6 @@ program
   .action(async (opts) => {
     await cmdTick({ dryRun: opts.dryRun });
   });
-
-program
-  .command("dotfiles-sync")
-  .description("Stage and optionally commit+push committable COS files")
-  .option("--push", "commit + push after staging", false)
-  .action((opts) => cmdDotfilesSync({ push: opts.push }));
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);

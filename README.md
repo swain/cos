@@ -193,10 +193,6 @@ The worker prompt tells workers to stop at PR-open and only respond to CI/review
 
 **Fix via work item:** `cos dispatch` hard-checks `sessions` for any open session on the same work item before creating a new one. (Already partially implemented — tighten and test.)
 
-### 7. `dotfiles-sync` command is stale
-
-The `cos dotfiles-sync` subcommand was written for an earlier plan that committed COS into the user's dotfiles repo. COS moved to a standalone repo; the subcommand is now dead code. Leave it for now (harmless), or remove it in a cleanup PR.
-
-### 8. No backup strategy for local-only files
+### 7. No backup strategy for local-only files
 
 `team.md`, `priorities.md`, `decisions.log`, `fleet.db` are all local-only and never committed. If your laptop dies, you lose them. Back up `~/.claude/cos/` separately (Time Machine, iCloud Drive, or a private encrypted git repo with `git-crypt`).

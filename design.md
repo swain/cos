@@ -311,57 +311,49 @@ Each writes a `signals` row keyed by `(kind, external_id)` to dedupe.
 
 Self-build adds: Sentry, Grafana, Slack mentions, calendar, ClickUp assignments.
 
-## Dotfiles Repo Integration
+## Repo Layout
 
-Durable, checked-in parts of `~/.claude/cos/` live in the user's personal dotfiles repo on GitHub. Setup during MVP Day 1:
+COS lives in its own standalone repo at `~/Repos/cos/` (published to `github.com/swain/cos`). The operational directory at `~/.claude/cos/` is a mix of symlinks (to the repo for generic machinery) and real local files (for personal state).
 
-1. **Prompt for dotfiles path.** Init script asks for the local clone path of the dotfiles repo (e.g., `~/dotfiles`). If it doesn't exist locally, ask for the GitHub URL and clone it.
-2. **Create `claude-cos/` subdirectory** in the dotfiles repo.
-3. **Move or symlink** the committable files from `~/.claude/cos/` into `dotfiles/claude-cos/`. Two options, pick one at init time:
-   - **In-place with symlink**: move files to `dotfiles/claude-cos/`, then symlink individual files back into `~/.claude/cos/`. Per-file symlinks (not directory-level) so local-only files coexist.
-   - **Worktree pattern**: `~/.claude/cos/` is the working directory and contains a `.git` that points at the dotfiles repo's `claude-cos/` subtree (via `git subtree` or sparse-checkout). More complex; use in-place symlink by default.
-4. **Write `.gitignore`** in `dotfiles/claude-cos/` to exclude volatile/sensitive files.
-
-### What gets committed
+### What lives in the repo (committable)
 
 - `design.md` — this spec
 - `USING_COS.md` — the how-to guide
-- `system.md` — persona (reference; may contain opinionated framing but no secrets)
-- `arch.md` — architectural notes
-- `ai-native.md` — pointers to eval docs
+- `system.md` — persona
+- `po.md` — the bio
+- `CLAUDE.md.template` — `~/.claude/CLAUDE.md` bootstrap
 - `cli/` — Node/TS CLI source (without `node_modules/`, without `dist/`)
-- `skills/` — the `cos` skill and its sub-skills (if they live here rather than `~/.claude/skills/`; to be decided)
-- `launchd/com.smolster.cos.cron.plist` — the LaunchAgent template (with `{{USER_HOME}}` placeholders)
-- `init.sh` — the bootstrap script that sets up a fresh machine
-- `.gitignore` — the list below
+- `prompts/cron.md`, `prompts/worker.md`
+- `bin/cos`, `bin/cos-tick`, `bin/spawn-worker`
+- `commands/{fleet,enqueue,cos,groom,dispatch}.md` — slash commands
+- `launchd/com.cos.cron.plist.template` — LaunchAgent template with `{{USER_HOME}}` / `{{LABEL}}` placeholders
+- `templates/` — starter copies of personal files (`team.md.template`, `priorities.md.template`, `arch.md.template`, `ai-native.md.template`, `watched-repos.json.template`, `config.json.template`)
+- `install.sh` — bootstrap script for fresh machines
+- `README.md`, `.gitignore`
 
-### What is NOT committed (lives locally, ignored)
+### What stays local-only (never committed anywhere)
 
-- `fleet.db` — runtime state, may contain references to private work items
-- `decisions.log` — may reference team members, incidents, private calls
+All under `~/.claude/cos/`:
+
+- `fleet.db` — runtime SQLite state
+- `decisions.log` — may reference teammates, incidents, private calls
 - `status.md` — ephemeral, regenerated every tick
-- `team.md` — contains named team members, dynamics, candid leadership notes; too sensitive to push to GitHub
-- `priorities.md` — contains business-sensitive goals
-- `worklogs/` — may reference secrets or internal URLs
-- `meetings/` — attendee names, agendas, action items
-- `logs/` — cron + worker stdout/stderr
-- `cli/node_modules/`, `cli/dist/`
+- `team.md` — candid people notes
+- `priorities.md` — business-sensitive goals
+- `arch.md` — org-specific architecture (customized from template; template in the repo is generic)
+- `ai-native.md` — pointers to your own eval docs
+- `watched-repos.json`, `config.json`
+- `worklogs/`, `meetings/`, `logs/`
 - Any file ending in `.local.md` (escape hatch for local-only notes)
-
-### Commit discipline
-
-COS will **not** auto-commit. When the user wants to publish changes, they (or a dispatched worker on demand) run `cos dotfiles sync` which stages committable files, shows a diff, and asks to push. This prevents accidental leaks of `fleet.db` or similar.
 
 ### Teammate adoption path
 
-A teammate who wants to adopt COS:
+A teammate cloning the cos repo:
 
-1. Clones the dotfiles repo.
-2. Runs `claude-cos/init.sh` — creates `~/.claude/cos/`, installs launchd agent, builds CLI, symlinks committed files.
-3. Writes their own `team.md`, `priorities.md` (local, never committed).
-4. Registers their own GitHub watched-repo list.
-
-`init.sh` is written in the MVP with this flow in mind even if no teammate adopts for months.
+1. `git clone https://github.com/swain/cos ~/Repos/cos`.
+2. `~/Repos/cos/install.sh` — symlinks shareable files into `~/.claude/`, copies starter templates for personal files (only if they don't exist — safe to re-run), builds the CLI, renders the launchd plist.
+3. Fill in `~/.claude/cos/team.md`, `priorities.md`. Customize `arch.md`, `ai-native.md`.
+4. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<whoami>.cos.cron.plist`.
 
 ## MVP Scope (hand-built, target: end of Day 1)
 
@@ -372,7 +364,7 @@ A teammate who wants to adopt COS:
 5. **Cron loop.** launchd LaunchAgent `com.smolster.cos.cron` every 900s. Invokes `claude -p` with the cron prompt, capturing output to `~/.claude/cos/logs/cron.log`. Loaded at login, survives reboots, no terminal session required.
 6. **Worker dispatch.** `spawn-worker` sub-skill + supporting tmux/bash script. Dispatches a work item to a tmux-resident `claude -p` worker with worklog path and heartbeat instructions.
 7. **`USING_COS.md` guide.** Seeded with initial usage patterns, English-intent examples, daily rhythm.
-8. **Dotfiles repo integration.** `init.sh` wired up; `claude-cos/` subdirectory in dotfiles repo created and populated; symlinks established; `.gitignore` in place. Initial commit to dotfiles repo with `design.md` and `USING_COS.md`.
+8. **Standalone `cos` repo.** `~/Repos/cos/` with all committable files at their natural paths; `install.sh` wired up to symlink into `~/.claude/` and copy starter templates for personal files. Initial commit locally; push to GitHub when the user is ready.
 
 ## Self-Build Queue (built by MVP, target: Days 2–5)
 
@@ -404,7 +396,7 @@ User can reply to a notification in plain English ("handle it autonomously," "wa
 
 ## Deliverables
 
-1. **`~/.claude/cos/design.md`** (this file) — committed to the dotfiles repo under `claude-cos/design.md`.
+1. **`~/Repos/cos/design.md`** (this file) — committed to the standalone `cos` repo, symlinked into `~/.claude/cos/design.md`.
 2. **`~/.claude/cos/USING_COS.md`** — the how-to-use guide. Written during MVP build and continuously updated.
 3. **The MVP itself** — code, skill definitions, CLAUDE.md updates, seed context files, initial cron registration.
 4. **The self-build queue** — 11 work items seeded into the MVP on launch day.

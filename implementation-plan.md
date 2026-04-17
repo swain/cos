@@ -2,7 +2,7 @@
 
 **Companion to:** `~/.claude/cos/design.md`
 **Target:** MVP operational by end of Day 1; self-build running by Day 2
-**Dotfiles repo:** `https://github.com/swain/dotfiles`
+**Repo:** standalone `~/Repos/cos/` (published to `github.com/swain/cos`)
 
 ---
 
@@ -28,15 +28,13 @@ ls ~/.claude/cos/     # already created
 ls ~/.claude/commands/  # exists
 ```
 
-Clone dotfiles if absent:
+Clone the cos repo if absent (only relevant for teammate adoption — the original author built the repo in place):
 
 ```bash
-if [ ! -d ~/Repos/dotfiles ]; then
-  gh repo clone swain/dotfiles ~/Repos/dotfiles
+if [ ! -d ~/Repos/cos ]; then
+  gh repo clone swain/cos ~/Repos/cos
 fi
 ```
-
-Set canonical path: `DOTFILES=~/Repos/dotfiles`. Hardcode for MVP; parameterize in `init.sh` for teammate adoption.
 
 ## Phase 1 — State substrate (Node/TS CLI) (90 min)
 
@@ -119,7 +117,6 @@ npm init -y
 | `cos idea-promote <idea-id>` | `--priority --repos --acceptance`                                                        | Converts idea → work item                                                 |
 | `cos tick`                   | `[--dry-run]`                                                                            | Runs the cron tick logic inline (used by launchd wrapper and for testing) |
 | `cos worker-prompt <wi-id>`  | —                                                                                        | Prints the assembled worker prompt for dispatch scripts                   |
-| `cos dotfiles-sync`          | `[--push]`                                                                               | Stages/commits committable files to dotfiles repo                         |
 
 ### 1.5 Build + install
 
@@ -493,87 +490,65 @@ Write `~/.claude/cos/USING_COS.md` (committed). Sections:
 
 Length target: 600–1000 lines, example-heavy.
 
-## Phase 7 — Dotfiles integration (60 min)
+## Phase 7 — Standalone repo + install.sh (60 min)
 
-### 7.1 Create subdirectory
+COS lives in its own repo at `~/Repos/cos/` (published to `github.com/swain/cos`). The operational directory `~/.claude/cos/` holds a mix of symlinks (to the repo for generic machinery) and real local files (for personal state — team.md, priorities.md, arch.md, ai-native.md, fleet.db, decisions.log, worklogs/, meetings/, logs/).
 
-```bash
-cd ~/Repos/dotfiles
-mkdir -p claude-cos/{cli,skills,prompts,launchd,commands-snippets}
-```
+### 7.1 Move committable files into the repo
 
-### 7.2 Move + symlink committable files
+For each committable file, move from `~/.claude/cos/<rel>` → `~/Repos/cos/<rel>`, then symlink back to `~/.claude/cos/<rel>`:
 
-For each file in the commit allowlist (from design.md), move it to `~/Repos/dotfiles/claude-cos/<rel-path>` and symlink back to `~/.claude/cos/<rel-path>`:
+Files and directories that go in the repo:
 
-```bash
-move_and_link() {
-  local rel="$1"
-  mkdir -p "$(dirname ~/Repos/dotfiles/claude-cos/$rel)"
-  mv ~/.claude/cos/$rel ~/Repos/dotfiles/claude-cos/$rel
-  ln -s ~/Repos/dotfiles/claude-cos/$rel ~/.claude/cos/$rel
-}
+- `design.md`, `implementation-plan.md`, `USING_COS.md`, `system.md`, `po.md` (single files)
+- `prompts/` (dir: `cron.md`, `worker.md`)
+- `bin/` (dir: `cos`, `cos-tick`, `spawn-worker`)
+- `cli/` (dir, with `package.json`, `tsconfig.json`, `tsup.config.ts`, `src/…`; `node_modules/` and `dist/` stay local via `.gitignore`)
+- `launchd/com.cos.cron.plist.template`
+- `commands/{fleet,enqueue,cos,groom,dispatch}.md` (copied from `~/.claude/commands/` and symlinked back)
+- `CLAUDE.md.template` (copied from `~/.claude/CLAUDE.md` and symlinked back)
 
-move_and_link design.md
-move_and_link system.md
-move_and_link arch.md
-move_and_link ai-native.md
-move_and_link USING_COS.md
-move_and_link cli/package.json
-move_and_link cli/tsconfig.json
-move_and_link cli/src  # whole directory
-move_and_link prompts/cron.md
-move_and_link prompts/worker.md
-move_and_link bin/cos
-move_and_link bin/cos-tick
-move_and_link bin/spawn-worker
-# Note: cli/node_modules and cli/dist stay local only; .gitignore covers them.
-```
+### 7.2 Templates for personal files
 
-Also: copy (don't move) the slash command files from `~/.claude/commands/` into `~/Repos/dotfiles/claude-cos/commands-snippets/` so they're versioned, but `~/.claude/commands/` itself is user-level. Teammate `init.sh` copies them into their own `~/.claude/commands/`.
+Starter copies live at `~/Repos/cos/templates/`:
 
-The LaunchAgent plist: committed as a template at `~/Repos/dotfiles/claude-cos/launchd/com.cos.cron.plist.template` with `{{USER_HOME}}` / `{{LABEL_PREFIX}}` placeholders. The resolved plist in `~/Library/LaunchAgents/` is NOT symlinked because launchd wants a real file at a specific path — `init.sh` renders the template into place.
+- `team.md.template`, `priorities.md.template`, `arch.md.template`, `ai-native.md.template`
+- `watched-repos.json.template`, `config.json.template`
 
-### 7.3 `.gitignore` in `claude-cos/`
+`install.sh` copies these into `~/.claude/cos/` only if the target doesn't exist (so re-runs don't clobber personal edits).
+
+### 7.3 `.gitignore`
 
 ```
-fleet.db
-decisions.log
-status.md
-team.md
-priorities.md
-worklogs/
-meetings/
-logs/
 cli/node_modules/
 cli/dist/
-*.local.md
+.DS_Store
 ```
 
-### 7.4 `init.sh`
+### 7.4 `install.sh`
 
-Bootstrap script for a fresh machine. Idempotent. Steps:
+Bootstrap script for any fresh machine. Idempotent. Steps:
 
-1. Check prereqs (node, tmux, gh, claude, launchctl).
-2. Create `~/.claude/cos/` dir structure.
-3. Symlink committed files from `claude-cos/` to `~/.claude/cos/`.
-4. Copy slash-command snippets to `~/.claude/commands/`.
-5. Prompt for personal context: writes initial `team.md`, `priorities.md` from templates.
-6. Render LaunchAgent plist from template with user paths; load via `launchctl bootstrap`.
+1. Check prereqs (node, tmux, gh, claude, launchctl, git).
+2. Create `~/.claude/cos/{logs,worklogs,meetings}/` and `~/.claude/commands/`.
+3. Symlink shareable files from `$REPO_ROOT/` into `~/.claude/cos/` via a `link_if_missing` helper (skip if already linked; leave alone if target is a real file).
+4. Symlink the 5 slash commands into `~/.claude/commands/`.
+5. Symlink `~/.claude/CLAUDE.md` → `$REPO_ROOT/CLAUDE.md.template`.
+6. Copy templates to `~/.claude/cos/` only if the target is missing.
 7. `cd cli && npm install && npm run build`.
-8. Run `cos init` to create the empty `fleet.db`.
-9. Print "COS is running. Type `/cos hi` to say hello."
+8. Add `~/.claude/cos/bin` to `$PATH` via `~/.zshrc` if not present.
+9. `cos init` to create `fleet.db` (idempotent).
+10. Render the LaunchAgent plist with user's paths + label (`com.$(whoami).cos.cron` by default; override with `COS_LAUNCHD_LABEL`).
+11. Print next-step instructions (load launchd, unpause dispatch).
 
-### 7.5 First commit
+### 7.5 First commit + publish
 
 ```bash
-cd ~/Repos/dotfiles
-git add claude-cos/
-git commit -m "Add COS (Chief of Staff) personal agent system
-
-See claude-cos/design.md for architecture, claude-cos/USING_COS.md
-for interaction patterns."
-git push origin main
+cd ~/Repos/cos
+git init -b main
+git add -A
+git commit -m "Initial commit: COS MVP"
+gh repo create swain/cos --public --source=. --remote=origin --push
 ```
 
 ## Phase 8 — Seed the self-build queue (30 min)
@@ -605,7 +580,7 @@ Checklist (all must pass before declaring MVP done):
 - [ ] Manually dispatch a trivial test work item (not one of the 11) and verify the worker opens a PR
 - [ ] Push a test `PushNotification` and confirm it arrives on your phone / desktop
 - [ ] `/cos hi` triggers the COS persona with durable context loaded
-- [ ] `~/Repos/dotfiles/claude-cos/` is committed and pushed
+- [ ] `~/Repos/cos/` has an initial commit (local or pushed to github)
 - [ ] `~/.claude/cos/USING_COS.md` renders cleanly and passes a self-read
 
 Flip `COS_DISPATCH_PAUSED=0`. Post-flip, the cron will start dispatching self-build items. Days 2–7 are COS building itself while you live your life and review PRs as they land.
@@ -618,7 +593,7 @@ Flagged for the author (me) to watch during Days 2–7:
 - **Duplicate PRs** if a worker fails silently and a retry is spawned. Mitigation: `cos dispatch` checks for existing PRs for the same work item before spawning.
 - **Cron cost creep.** Mitigation: first week, monitor token usage; if ticks routinely exceed 10k input tokens, add a "light tick" every-other-run that skips deep triage.
 - **Worktree sprawl.** Mitigation: automatic cleanup at tick start (PR merged → worktree removed).
-- **Dotfiles leak.** Mitigation: `.gitignore` covers the known bad files; `cos dotfiles-sync` requires manual push and shows a diff before pushing.
+- **Secret leak into repo.** Mitigation: `.gitignore` covers `cli/node_modules/` and `cli/dist/`; personal files (`team.md`, `priorities.md`, `fleet.db`, etc.) live in `~/.claude/cos/` and are never moved into the repo.
 
 ## Execution Order
 

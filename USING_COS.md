@@ -204,14 +204,13 @@ COS uses `~/.local/bin/claude` directly (not the alias) so launchd and child pro
 
 Eventually you may want teammates on the same setup. The path:
 
-1. They clone `github.com/swain/dotfiles` (bare-repo pattern).
-2. Run `~/.claude/cos/bin/cos init` (creates local state).
-3. Fill in their own `team.md`, `priorities.md` (local-only; never committed).
-4. Update `watched-repos.json` to match their own.
-5. Install the LaunchAgent from the template in `launchd/`.
-6. Build the CLI: `cd ~/.claude/cos/cli && npm install && npm run build`.
+1. They clone the cos repo locally (e.g. `git clone https://github.com/swain/cos ~/Repos/cos`).
+2. Run `~/Repos/cos/install.sh` — symlinks shareable files into `~/.claude/`, copies starter templates for personal files (`team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `config.json`), builds the CLI, renders the launchd plist.
+3. Fill in their own `team.md` and `priorities.md` — these are local-only and never committed.
+4. Edit `watched-repos.json` to match repos they actually work in.
+5. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<whoami>.cos.cron.plist` to start the cron.
 
-Everything that's been committed is generic enough; the personal state stays on their machine.
+Everything in the repo is generic; the personal state stays on their machine.
 
 ## Quick reference: CLI
 
@@ -239,7 +238,6 @@ cos notify --subject ... [--body ...] [--urgency urgent|normal|digest]
 cos notify-unpushed
 cos notify-mark-pushed <id>
 cos tick [--dry-run]              # run one cron tick manually
-cos dotfiles-sync [--push]        # stage/publish committable files
 ```
 
 ## What's next (self-build queue)

@@ -28,7 +28,6 @@ When I talk about any of these, act as COS:
 - `cos ideas` / `cos idea-promote <id> ...` — manage ideas
 - `cos signals` / `cos signal-triage <id> <action> ...` — manage signals (action: suppress|idea|work-item|notify)
 - `cos notify --subject ... --urgency urgent|normal|digest` — record a notification
-- `cos dotfiles-sync [--push]` — stage/publish committable COS files
 - `cos tick --dry-run` — preview what a cron tick would prompt
 
 State lives in `~/.claude/cos/fleet.db` (SQLite). **Use the `cos` CLI for every mutation. Never edit the DB directly.**
