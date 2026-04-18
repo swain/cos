@@ -29,6 +29,7 @@ import {
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
 import { cmdInbox } from "./commands/inbox.js";
 import { cmdInboxServe } from "./commands/inbox-serve.js";
+import { cmdPeek } from "./commands/peek.js";
 import {
   cmdRecurringList,
   cmdRecurringAdd,
@@ -256,6 +257,12 @@ program
   .command("inbox-serve")
   .description("Start the local inbox HTTP server at 127.0.0.1:4411")
   .action(() => cmdInboxServe());
+
+program
+  .command("peek")
+  .description("Attach to the cos-workers tmux session (or list its windows)")
+  .option("--list", "list windows in the session instead of attaching", false)
+  .action((opts) => cmdPeek({ list: opts.list }));
 
 const recurringCmd = program
   .command("recurring")
