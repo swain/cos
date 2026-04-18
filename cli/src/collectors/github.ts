@@ -8,7 +8,7 @@ import {
 } from "../util.js";
 
 export type CollectedSignal = {
-  source: "github";
+  source: "github" | "grafana";
   kind: string;
   external_id: string | null;
   payload: Record<string, unknown>;
