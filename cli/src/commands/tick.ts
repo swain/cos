@@ -28,6 +28,7 @@ import { collectGithubSignals } from "../collectors/github.js";
 import { collectGrafanaSignals } from "../collectors/grafana.js";
 import { runCalendarCollector } from "../collectors/calendar.js";
 import { collectClickupSignals } from "../collectors/clickup.js";
+import { collectSlackSignals } from "../collectors/slack.js";
 import { cmdRenderStatus } from "./fleet.js";
 import { ideas } from "../db.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
@@ -199,6 +200,36 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
     } catch (e: any) {
       console.error(
         chalk.yellow(`[tick] clickup collection error: ${e.message}`),
+      );
+    }
+
+    // 1e) Collect Slack signals (DMs + @-mentions via MCP). Best-effort:
+    //     slack requires spawning an inner claude subprocess for MCP access,
+    //     so any failure here should not abort the tick.
+    try {
+      const collected = await collectSlackSignals();
+      let inserted = 0;
+      for (const s of collected) {
+        const id = `sig-${ulid()}`;
+        const res = signals.insert({
+          id,
+          source: s.source,
+          kind: s.kind,
+          external_id: s.external_id,
+          payload: s.payload,
+          status: "new",
+          triaged_at: null,
+        });
+        if (res.inserted) inserted++;
+      }
+      console.error(
+        chalk.gray(
+          `[tick] slack: ${inserted} new / ${collected.length} checked`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(
+        chalk.yellow(`[tick] slack collection error: ${e.message}`),
       );
     }
 
