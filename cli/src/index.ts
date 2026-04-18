@@ -36,6 +36,7 @@ import {
   cmdRecurringMarkRan,
   cmdRecurringSetEnabled,
 } from "./commands/recurring.js";
+import { cmdGenerateAiNative } from "./commands/generators.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -236,6 +237,13 @@ program
   .command("notify-mark-pushed <id>")
   .description("Mark a notification as pushed")
   .action((id) => cmdNotifyMarkPushed(id));
+
+program
+  .command("generate-ai-native")
+  .description(
+    "Generate ideas from ai-native evaluation docs (~/Repos/thegoodparty/ai-native-evaluation-*.md)",
+  )
+  .action(() => cmdGenerateAiNative());
 
 program
   .command("tick")
