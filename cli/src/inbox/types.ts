@@ -28,6 +28,10 @@ export type IdeaMeta = {
   score: number;
   confidence: number;
   repos_guess: string[];
+  // Parsed out of titles shaped like `[ai-native:<repo>:dim<N>] <rest>`.
+  // Lets the renderer move the technical prefix out of the title area and
+  // into the muted meta line while keeping the title itself readable.
+  sourceTag: string | null;
 };
 
 export type InboxItem = {

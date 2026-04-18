@@ -75,8 +75,12 @@ const styles = `
   --red: #e0534b;
   --red-bg: #3a1b19;
   --amber: #d7a34b;
+  --amber-bg: #2b220f;
   --green: #4cae6b;
+  --green-bg: #132818;
+  --green-fg: #7bd498;
   --accent: #7eb3ff;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
 body {
@@ -240,6 +244,228 @@ h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
 .ideas-footer .confirm { color: var(--amber); font-size: 12px; margin-left: 8px; }
 .ideas-more { margin-top: 4px; color: var(--muted); font-size: 11px; }
 button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ----- IDEAS section: verdict-driven layout ----- */
+.section.ideas h2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.section.ideas h2 .count {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.idea {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+}
+.idea--your-call {
+  border-left-color: var(--amber);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.idea--suggest-promote { border-left-color: var(--green); }
+.idea--suggest-kill { border-left-color: var(--red); }
+
+.idea__head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.idea__main {
+  flex: 1;
+  min-width: 0;
+}
+.idea__title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--fg);
+  word-break: break-word;
+  white-space: normal;
+}
+.idea--your-call .idea__title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.idea__primary {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.idea__primary form { margin: 0; }
+.idea__primary button,
+.idea__primary a.btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.idea__primary button:hover { background: var(--border); }
+
+.idea__primary .btn--accept-promote {
+  border-color: var(--green);
+  color: var(--green-fg);
+  font-weight: 600;
+  padding: 6px 16px;
+}
+.idea__primary .btn--accept-promote:hover { background: var(--green-bg); }
+.idea__primary .btn--accept-kill {
+  border-color: var(--red);
+  color: var(--red);
+  font-weight: 600;
+  padding: 6px 16px;
+}
+.idea__primary .btn--accept-kill:hover { background: var(--red-bg); }
+
+.idea__primary .btn--promote { border-color: var(--green); color: var(--green-fg); }
+.idea__primary .btn--promote:hover { background: var(--green-bg); }
+.idea__primary .btn--kill { border-color: var(--red); color: var(--red); }
+.idea__primary .btn--kill:hover { background: var(--red-bg); }
+.idea__primary .btn--defer { color: var(--muted); }
+
+/* Rationale always visible for your-call; compressed via <details> elsewhere */
+.idea--your-call .idea__rationale {
+  margin-top: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.idea__details { margin-top: 6px; }
+.idea__details summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+.idea__details summary::-webkit-details-marker { display: none; }
+.idea__details summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 10px;
+  font-size: 9px;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.12s ease-out;
+}
+.idea__details[open] summary::before { transform: rotate(90deg); }
+.idea__rationale-line {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.idea__details-body {
+  margin: 6px 0 0 14px;
+  padding: 6px 0 2px 10px;
+  border-left: 1px solid var(--border);
+}
+.idea__details-body .idea__rationale {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.idea__meta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.idea__meta .tag { color: var(--muted); }
+.idea__meta .score {
+  color: var(--muted);
+}
+.idea__meta .score .v { color: var(--fg); }
+.idea__meta .repo { color: var(--muted); }
+.idea__meta .oid {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+.idea__secondary {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.idea__secondary form { margin: 0; }
+.idea__secondary button {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.idea__secondary button:hover { background: var(--border); }
+.idea__secondary .btn--promote { border-color: var(--green); color: var(--green-fg); }
+.idea__secondary .btn--promote:hover { background: var(--green-bg); }
+.idea__secondary .btn--kill { border-color: var(--red); color: var(--red); }
+.idea__secondary .btn--kill:hover { background: var(--red-bg); }
+.idea__secondary .btn--defer { color: var(--muted); }
+
+.idea__reply {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  gap: 6px;
+}
+.idea__reply input[type=text] {
+  flex: 1;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.idea__reply button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
 `;
 
 const isHttpUrl = (s: string): boolean =>
@@ -322,69 +548,114 @@ const renderActions = (item: InboxItem, returnTo: string): string => {
       );
     case "recent-win":
       return btn(`/work-items/${id}/pr-reviewed`, "dismiss", returnTo);
-    case "idea": {
-      const verdict = item.ideaMeta?.verdict ?? "your-call";
-      const acceptDisabled = verdict === "your-call";
-      const acceptLabel =
-        verdict === "suggest-promote"
-          ? "accept (promote)"
-          : verdict === "suggest-kill"
-            ? "accept (kill)"
-            : "accept";
-      const acceptBtn = `<form method="post" action="/ideas/${id}/accept">${hiddenReturn(returnTo)}<button class="primary"${acceptDisabled ? ' disabled title="pick an explicit action"' : ""}>${acceptLabel}</button></form>`;
-      return (
-        acceptBtn +
-        btn(`/ideas/${id}/promote`, "promote", returnTo) +
-        btn(`/ideas/${id}/kill`, "kill", returnTo, "danger") +
-        btn(`/ideas/${id}/defer`, "defer 7d", returnTo)
-      );
-    }
+    case "idea":
+      // Ideas have a bespoke renderer (renderIdeaItem) — this path isn't used.
+      return "";
   }
 };
 
-const renderIdeaBody = (item: InboxItem): string => {
+// Renders the muted bottom line of an idea row. Source tag, confidence/score,
+// repo(s). Deliberately single-line, monospace, low-contrast — meta is support
+// for a decision, not the decision itself.
+const renderIdeaMeta = (item: InboxItem): string => {
   const m = item.ideaMeta;
   if (!m) return "";
+  const parts: string[] = [];
+  if (m.sourceTag) {
+    parts.push(`<span class="tag">${escapeHtml(m.sourceTag)}</span>`);
+  }
   const confPct = Math.round(m.confidence * 100);
   const scorePct = Math.round(m.score * 100);
-  const repos = m.repos_guess.length
-    ? m.repos_guess
-        .map((r) => `<span class="chip">${escapeHtml(r)}</span>`)
-        .join(" ")
-    : "";
-  const rationale = m.rationale
-    ? `<div class="text">${escapeHtml(m.rationale)}</div>`
-    : "";
+  parts.push(
+    `<span class="score">score <span class="v">${scorePct}</span> · conf <span class="v">${confPct}</span></span>`,
+  );
+  for (const r of m.repos_guess) {
+    parts.push(`<span class="repo">${escapeHtml(r)}</span>`);
+  }
+  parts.push(`<span class="oid">${escapeHtml(item.id)}</span>`);
+  return `<div class="idea__meta">${parts.join("")}</div>`;
+};
+
+const firstLine = (s: string, max = 140): string => {
+  const line = s.split(/\r?\n/)[0] ?? "";
+  const trimmed = line.trim();
+  return trimmed.length > max ? trimmed.slice(0, max - 1) + "…" : trimmed;
+};
+
+const renderIdeaItem = (item: InboxItem, returnTo: string): string => {
+  const m = item.ideaMeta;
+  const verdict = m?.verdict ?? "your-call";
+  const id = encodeURIComponent(item.id);
+  const key = escapeHtml(item.key);
+  const rtn = hiddenReturn(returnTo);
+  const rationale = m?.rationale ?? "";
+  const rationaleSnippet = rationale ? firstLine(rationale) : "";
+
+  const acceptBtn = (label: string, cls: string): string =>
+    `<form method="post" action="/ideas/${id}/accept">${rtn}<button class="${cls}">${escapeHtml(label)}</button></form>`;
+
+  // Primary action cluster differs by verdict: one big accept for suggest-*,
+  // three equal buttons for your-call (no default is correct — the user
+  // decides).
+  const primary =
+    verdict === "suggest-promote"
+      ? acceptBtn("accept", "btn--accept-promote")
+      : verdict === "suggest-kill"
+        ? acceptBtn("accept", "btn--accept-kill")
+        : `<form method="post" action="/ideas/${id}/promote">${rtn}<button class="btn--promote">promote</button></form>` +
+          `<form method="post" action="/ideas/${id}/kill">${rtn}<button class="btn--kill">kill</button></form>` +
+          `<form method="post" action="/ideas/${id}/defer">${rtn}<button class="btn--defer">defer 7d</button></form>`;
+
+  // Secondary actions are the dissenting moves when a suggest-* verdict is
+  // wrong. Tucked inside <details> so they don't compete for the eye.
+  const secondary =
+    verdict === "suggest-promote"
+      ? `<div class="idea__secondary">` +
+        `<form method="post" action="/ideas/${id}/kill">${rtn}<button class="btn--kill">kill instead</button></form>` +
+        `<form method="post" action="/ideas/${id}/defer">${rtn}<button class="btn--defer">defer 7d</button></form>` +
+        `</div>`
+      : verdict === "suggest-kill"
+        ? `<div class="idea__secondary">` +
+          `<form method="post" action="/ideas/${id}/promote">${rtn}<button class="btn--promote">promote instead</button></form>` +
+          `<form method="post" action="/ideas/${id}/defer">${rtn}<button class="btn--defer">defer 7d</button></form>` +
+          `</div>`
+        : "";
+
+  // your-call rows show rationale and meta directly — this IS the decision
+  // surface. suggest-* rows hide them behind a <details> so a sweep of 20
+  // rows is a vertical scan, not a wall of text.
+  const body =
+    verdict === "your-call"
+      ? (rationale
+          ? `<p class="idea__rationale">${escapeHtml(rationale)}</p>`
+          : "") + renderIdeaMeta(item)
+      : `<details class="idea__details">` +
+        `<summary><span class="idea__rationale-line">${escapeHtml(rationaleSnippet || "(no rationale)")}</span></summary>` +
+        `<div class="idea__details-body">` +
+        (rationale
+          ? `<p class="idea__rationale">${escapeHtml(rationale)}</p>`
+          : "") +
+        renderIdeaMeta(item) +
+        secondary +
+        `</div>` +
+        `</details>`;
+
   return `
-    ${rationale}
-    <div class="meta">
-      <span class="verdict ${escapeHtml(m.verdict)}">${escapeHtml(m.verdict)}</span>
-      <span class="pill">conf ${confPct}%</span>
-      <span class="pill">score ${scorePct}%</span>
-      ${repos}
-      <span>${escapeHtml(item.id)}</span>
-    </div>`;
+<article class="idea idea--${escapeHtml(verdict)}" id="row-${key}">
+  <div class="idea__head">
+    <div class="idea__main">
+      <h3 class="idea__title">${escapeHtml(item.subject)}</h3>
+    </div>
+    <div class="idea__primary">${primary}</div>
+  </div>
+  ${body}
+</article>`;
 };
 
 const renderItem = (item: InboxItem, returnTo: string): string => {
   const urgentClass = item.urgency === "urgent" ? " urgent" : "";
-  // Idea rows use a richer body layout (verdict badge, rationale, chips).
   if (item.kind === "idea") {
-    return `
-<div class="item${urgentClass}" id="row-${escapeHtml(item.key)}">
-  <div class="row">
-    <div class="body">
-      <div class="subject">${escapeHtml(item.subject)}</div>
-      ${renderIdeaBody(item)}
-    </div>
-    <div class="actions">${renderActions(item, returnTo)}</div>
-  </div>
-  <form class="nl-form" method="post" action="/inbox/rows/${encodeURIComponent(item.key)}/respond">
-    ${hiddenReturn(returnTo)}
-    <input type="text" name="text" placeholder="reply in plain English — enqueues a work item for Po">
-    <button>send</button>
-  </form>
-</div>`;
+    return renderIdeaItem(item, returnTo);
   }
   const related = renderRelated(item.related_ids);
   const metaExtras = item.meta
@@ -498,8 +769,24 @@ const renderIdeasSection = (
           : `<form method="post" action="/ideas/accept-all-suggest-kill">${hiddenReturn(`/#${sectionId}?confirm-bulk-kill=1`)}<button class="danger">accept all suggest-kill</button></form>`
       }</div>`
     : "";
-  const countLabel = `${top.length}${rest.length ? ` of ${items.length}` : ""}`;
-  return `<section class="section ${cls}" id="${sectionId}"><h2>${title} (${countLabel})</h2>${topBody}${hiddenMore}${unscoredLine}${bulk}</section>`;
+  // Always state both numbers so the header answers "what am I looking at?"
+  // in one glance: "8 of 50 scored", and the awaiting-triage line below
+  // handles the unscored count.
+  const countSegments: string[] = [];
+  if (stats.scoredTotal > 0) {
+    countSegments.push(
+      top.length < stats.scoredTotal
+        ? `${top.length} of ${stats.scoredTotal} scored`
+        : `${stats.scoredTotal} scored`,
+    );
+  }
+  if (stats.unscoredTotal > 0) {
+    countSegments.push(`${stats.unscoredTotal} awaiting`);
+  }
+  const countLabel = countSegments.length
+    ? `<span class="count">${countSegments.join(" · ")}</span>`
+    : "";
+  return `<section class="section ${cls}" id="${sectionId}"><h2>${title} ${countLabel}</h2>${topBody}${hiddenMore}${unscoredLine}${bulk}</section>`;
 };
 
 const renderTickBanner = (tick: CronTickStatus | null): string => {
