@@ -80,7 +80,18 @@ The Boss asked for a nudge every 14 days to review priorities.md. Do this check 
 
 When the Boss eventually engages in dialog mode about this, **actually do the walkthrough**: read priorities.md + the last ~30 entries of decisions.log, ask which stated priorities have drifted, whether new commitments deserve a line, whether anything should move to the "non-priorities" section. Update priorities.md inline. Touching the file resets the 14-day clock.
 
-### 7. EXIT
+### 7. RUN DUE RECURRING TASKS
+
+Check `cos recurring due --format json`. For each task in the output:
+
+1. Read the `prompt` field (the full text of the prompt file).
+2. **Execute the prompt as a sub-task within this tick** — follow its instructions to completion using whatever tools it calls for (MCP, bash, file edits).
+3. When done, call `cos recurring mark-ran <id> --status ok --notes "<one line summary>"`.
+4. If the prompt fails or errors out partway through, call `cos recurring mark-ran <id> --status failed --notes "<why>"` and keep going with the rest of the tick.
+
+Recurring tasks should be self-contained and short (<1 min). If a task is ballooning the tick duration, note it in the decision log and we'll split it off later.
+
+### 8. EXIT
 
 When done, do not perform other tasks. Do not open a new conversation with the user. Just exit.
 

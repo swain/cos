@@ -27,6 +27,13 @@ import {
   cmdNotifyMarkPushed,
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
+import {
+  cmdRecurringList,
+  cmdRecurringAdd,
+  cmdRecurringDue,
+  cmdRecurringMarkRan,
+  cmdRecurringSetEnabled,
+} from "./commands/recurring.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -235,6 +242,66 @@ program
   .action(async (opts) => {
     await cmdTick({ dryRun: opts.dryRun });
   });
+
+const recurringCmd = program
+  .command("recurring")
+  .description("Manage recurring tasks (tick-driven)");
+
+recurringCmd
+  .command("list")
+  .description("List recurring tasks")
+  .option("--enabled", "only enabled")
+  .option("--disabled", "only disabled")
+  .action((opts) => {
+    const enabled = opts.enabled ? true : opts.disabled ? false : undefined;
+    cmdRecurringList({ enabled });
+  });
+
+recurringCmd
+  .command("add")
+  .description("Add a recurring task")
+  .requiredOption("--id <id>", "must start with 'rec-'")
+  .requiredOption("--title <t>")
+  .requiredOption("--hours <n>", "cadence in hours")
+  .requiredOption(
+    "--prompt-file <path>",
+    "absolute or relative to ~/.claude/cos/",
+  )
+  .option("--start-at <iso>", "first due time (default: now)")
+  .action((opts) => {
+    cmdRecurringAdd({
+      id: opts.id,
+      title: opts.title,
+      hours: parseInt(opts.hours, 10),
+      promptFile: opts.promptFile,
+      startAt: opts.startAt,
+    });
+  });
+
+recurringCmd
+  .command("due")
+  .description("List tasks that are due now")
+  .option("--format <text|json>", "output format", "text")
+  .action((opts) => cmdRecurringDue({ format: opts.format }));
+
+recurringCmd
+  .command("mark-ran <id>")
+  .description("Record that a recurring task ran; reschedules next_run_at")
+  .option("--status <ok|failed>", "run outcome", "ok")
+  .option("--notes <s>", "short summary")
+  .action((id, opts) =>
+    cmdRecurringMarkRan(id, { status: opts.status, notes: opts.notes }),
+  );
+
+recurringCmd
+  .command("enable <id>")
+  .description("Enable a recurring task")
+  .action((id) => cmdRecurringSetEnabled(id, true));
+
+recurringCmd
+  .command("disable <id>")
+  .description("Disable a recurring task")
+  .action((id) => cmdRecurringSetEnabled(id, false));
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);

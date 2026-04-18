@@ -88,3 +88,17 @@ CREATE TABLE IF NOT EXISTS kv (
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS recurring_tasks (
+  id             TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  cadence_hours  INTEGER NOT NULL,
+  prompt_path    TEXT NOT NULL,
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  last_run_at    TEXT,
+  next_run_at    TEXT NOT NULL,
+  last_status    TEXT,
+  last_notes     TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_recurring_tasks_due ON recurring_tasks(enabled, next_run_at);

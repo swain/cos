@@ -11,7 +11,14 @@ import {
   PROMPTS_DIR,
   parseJson,
 } from "./util.js";
-import type { WorkItem, Idea, Signal, Session, Notification } from "./types.js";
+import type {
+  WorkItem,
+  Idea,
+  Signal,
+  Session,
+  Notification,
+  RecurringTask,
+} from "./types.js";
 
 let _db: Database.Database | null = null;
 
@@ -348,6 +355,89 @@ export const cosLog = {
     return getDb()
       .prepare(`SELECT * FROM cos_log ORDER BY tick_at DESC LIMIT ?`)
       .all(n) as any[];
+  },
+};
+
+const rowToRecurringTask = (r: any): RecurringTask => ({
+  id: r.id,
+  title: r.title,
+  cadence_hours: r.cadence_hours,
+  prompt_path: r.prompt_path,
+  enabled: !!r.enabled,
+  last_run_at: r.last_run_at,
+  next_run_at: r.next_run_at,
+  last_status: r.last_status,
+  last_notes: r.last_notes,
+  created_at: r.created_at,
+});
+
+export const recurring = {
+  insert(
+    t: Omit<
+      RecurringTask,
+      "created_at" | "last_run_at" | "last_status" | "last_notes"
+    >,
+  ) {
+    getDb()
+      .prepare(
+        `INSERT INTO recurring_tasks (id, title, cadence_hours, prompt_path, enabled, next_run_at)
+         VALUES (@id, @title, @cadence_hours, @prompt_path, @enabled, @next_run_at)`,
+      )
+      .run({ ...t, enabled: t.enabled ? 1 : 0 });
+  },
+  get(id: string): RecurringTask | null {
+    const r = getDb()
+      .prepare(`SELECT * FROM recurring_tasks WHERE id = ?`)
+      .get(id) as any;
+    return r ? rowToRecurringTask(r) : null;
+  },
+  list(filter?: { enabled?: boolean }): RecurringTask[] {
+    let sql = `SELECT * FROM recurring_tasks WHERE 1=1`;
+    const params: any = {};
+    if (filter?.enabled !== undefined) {
+      sql += ` AND enabled = @enabled`;
+      params.enabled = filter.enabled ? 1 : 0;
+    }
+    sql += ` ORDER BY next_run_at ASC`;
+    return (getDb().prepare(sql).all(params) as any[]).map(rowToRecurringTask);
+  },
+  listDue(asOf: string): RecurringTask[] {
+    return (
+      getDb()
+        .prepare(
+          `SELECT * FROM recurring_tasks WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC`,
+        )
+        .all(asOf) as any[]
+    ).map(rowToRecurringTask);
+  },
+  markRan(
+    id: string,
+    opts: { status: "ok" | "failed"; notes?: string; asOf?: string },
+  ) {
+    const t = recurring.get(id);
+    if (!t) throw new Error(`recurring task not found: ${id}`);
+    const ran = opts.asOf ?? new Date().toISOString();
+    const next = new Date(
+      new Date(ran).getTime() + t.cadence_hours * 3600_000,
+    ).toISOString();
+    getDb()
+      .prepare(
+        `UPDATE recurring_tasks
+         SET last_run_at = @ran, next_run_at = @next, last_status = @status, last_notes = @notes
+         WHERE id = @id`,
+      )
+      .run({
+        id,
+        ran,
+        next,
+        status: opts.status,
+        notes: opts.notes ?? null,
+      });
+  },
+  setEnabled(id: string, enabled: boolean) {
+    getDb()
+      .prepare(`UPDATE recurring_tasks SET enabled = ? WHERE id = ?`)
+      .run(enabled ? 1 : 0, id);
   },
 };
 

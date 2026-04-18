@@ -120,3 +120,20 @@ export const NotificationSchema = z.object({
   created_at: z.string(),
 });
 export type Notification = z.infer<typeof NotificationSchema>;
+
+export const RecurringTaskStatusSchema = z.enum(["ok", "failed"]);
+export type RecurringTaskStatus = z.infer<typeof RecurringTaskStatusSchema>;
+
+export const RecurringTaskSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  cadence_hours: z.number().int().positive(),
+  prompt_path: z.string(),
+  enabled: z.boolean(),
+  last_run_at: z.string().nullable(),
+  next_run_at: z.string(),
+  last_status: RecurringTaskStatusSchema.nullable(),
+  last_notes: z.string().nullable(),
+  created_at: z.string(),
+});
+export type RecurringTask = z.infer<typeof RecurringTaskSchema>;
