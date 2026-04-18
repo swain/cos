@@ -106,7 +106,7 @@ npm init -y
 | Command                      | Args                                                                                     | Behavior                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `cos init`                   | —                                                                                        | Creates dirs, initializes `fleet.db`, writes default state.md, idempotent |
-| `cos enqueue`                | `--title --description --repos --priority --acceptance` (stdin fallback for long fields) | Writes `work_items` row; prints `wi-<id>`                                 |
+| `cos enqueue`                | `--title --description --repos --priority --acceptance` (stdin fallback for long fields) | Writes `work_items` row; prints `wi-<num>-<slug>`                         |
 | `cos fleet`                  | `[--format md\|json]` (default md)                                                       | Renders status from queue + sessions + recent notifications               |
 | `cos dispatch <wi-id>`       | `[--force]`                                                                              | Calls spawn-worker; writes sessions row; returns session id               |
 | `cos heartbeat <sess-id>`    | `[--step <name>]`                                                                        | Updates `sessions.last_heartbeat`                                         |

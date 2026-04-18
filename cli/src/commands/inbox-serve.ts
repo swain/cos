@@ -293,7 +293,7 @@ const renderItem = (item: InboxItem): string => {
         <span>${relTime(item.created_at)} ago</span>
         ${related ? `<span>${related}</span>` : ""}
         ${metaExtras}
-        <span>${escapeHtml(item.id)}</span>
+        <span>${escapeHtml(item.displayLabel ?? item.id)}</span>
       </div>
     </div>
     <div class="actions">${renderActions(item)}</div>

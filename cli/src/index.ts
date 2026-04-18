@@ -10,6 +10,8 @@ import {
   cmdWorkerPrompt,
   cmdDispatch,
   cmdWorkerPrimaryWorktree,
+  cmdWorkerDisplayId,
+  cmdWorkerWindowName,
   cmdWorkItemSetDeps,
 } from "./commands/workitems.js";
 import {
@@ -154,6 +156,18 @@ program
   .command("worker-primary-worktree <workItemId>")
   .description("Print the primary worktree path for a work item")
   .action((id) => cmdWorkerPrimaryWorktree(id));
+
+program
+  .command("work-item-display-id <workItemId>")
+  .description("Print the human-friendly wi-<num>-<slug> id for a work item")
+  .action((id) => cmdWorkerDisplayId(id));
+
+program
+  .command("worker-window-name <workItemId>")
+  .description(
+    "Print the tmux window name for a work item (used by spawn-worker)",
+  )
+  .action((id) => cmdWorkerWindowName(id));
 
 program
   .command("dispatch <workItemId>")

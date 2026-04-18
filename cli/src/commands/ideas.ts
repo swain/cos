@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
 import chalk from "chalk";
 import { ideas, workItems } from "../db.js";
+import { displayWorkItemId } from "../util.js";
 
 export const cmdIdeasList = (status?: string) => {
   const list = ideas.list(status ? { status } : undefined);
@@ -31,7 +32,7 @@ export const cmdIdeaPromote = (
     process.exit(2);
   }
   const wiId = `wi-${ulid()}`;
-  workItems.insert({
+  const { num, slug } = workItems.insert({
     id: wiId,
     title: opts.title ?? i.title,
     description: opts.description ?? i.description,
@@ -50,7 +51,12 @@ export const cmdIdeaPromote = (
     needs_planning: false,
   });
   ideas.update(ideaId, { status: "promoted", promoted_to: wiId });
-  console.log(chalk.green("promoted"), ideaId, "→", wiId);
+  console.log(
+    chalk.green("promoted"),
+    ideaId,
+    "→",
+    displayWorkItemId({ id: wiId, num, slug }),
+  );
 };
 
 export const cmdIdeaInsert = (opts: {

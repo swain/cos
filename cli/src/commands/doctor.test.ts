@@ -9,6 +9,7 @@ process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
 import { checkInvariant9StrandedWorkItem, runDoctor } from "./doctor.js";
 import { workItems, sessions, getDb } from "../db.js";
+import { displayWorkItemId } from "../util.js";
 
 afterAll(() => {
   getDb().close();
@@ -99,8 +100,9 @@ describe("doctor: stranded-work-item invariant", () => {
     );
     expect(finding).toBeDefined();
     expect(finding!.ok).toBe(false);
-    expect(finding!.entries.some((e) => e.id === wiId)).toBe(true);
-    expect(finding!.fixed.some((x) => x.id === wiId)).toBe(true);
+    const display = displayWorkItemId(workItems.get(wiId)!);
+    expect(finding!.entries.some((e) => e.id === display)).toBe(true);
+    expect(finding!.fixed.some((x) => x.id === display)).toBe(true);
 
     const wi = workItems.get(wiId)!;
     expect(wi.status).toBe("queued");
@@ -198,7 +200,11 @@ describe("doctor: stranded-work-item invariant", () => {
       format: "json",
     });
     expect(finding.ok).toBe(false);
-    expect(finding.entries.some((e) => e.id === wiId)).toBe(true);
+    expect(
+      finding.entries.some(
+        (e) => e.id === displayWorkItemId(workItems.get(wiId)!),
+      ),
+    ).toBe(true);
 
     const wi = workItems.get(wiId)!;
     expect(wi.status).toBe("queued");
@@ -226,7 +232,11 @@ describe("doctor: stranded-work-item invariant", () => {
       (f) => f.invariant === "stranded-work-item",
     )!;
     expect(finding.ok).toBe(false);
-    expect(finding.entries.some((e) => e.id === wiId)).toBe(true);
+    expect(
+      finding.entries.some(
+        (e) => e.id === displayWorkItemId(workItems.get(wiId)!),
+      ),
+    ).toBe(true);
     expect(finding.fixed).toHaveLength(0);
 
     const wi = workItems.get(wiId)!;

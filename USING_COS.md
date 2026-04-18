@@ -176,7 +176,7 @@ This is the answer to "how do I tell Po what to do with that row?" — no button
 | "status?" / "what's going on?"                                    | Runs `cos fleet`, gives 3-line digest.                                                       |
 | "add: fix X in gp-api"                                            | Grooms inline (title/description/acceptance), then `cos enqueue`. Offers to dispatch.        |
 | "idea: split queueConsumer per-type"                              | Writes to `ideas` table via `cos idea`. No follow-up unless you ask.                         |
-| "dispatch wi-01K…"                                                | Runs `cos dispatch <id>`. Returns session id.                                                |
+| "dispatch wi-42" / "dispatch wi-42-fix-cos-worktrees"             | Runs `cos dispatch <id>`. Also accepts the full ULID. Returns session id.                    |
 | "triage ideas"                                                    | `/groom` flow. Walks backlog, one at a time.                                                 |
 | "what do you think about X?" (design, tradeoff, strategic)        | Loads full persona + team + arch + priorities. Engages as strategic advisor per `system.md`. |
 | "pressure-test this design doc" [paste]                           | Same as above — COS applies rigorous-not-polite stance.                                      |
@@ -290,7 +290,7 @@ doctor: 2 issue(s) across 7 invariants — fixed=0 notified=0 (dry-run)
   ✓ silent-worker
   ✓ pr-status-drift
   ✗ queued-but-running (1)
-      - wi-01K…: queued work item has active session
+      - wi-42-fix-cos-worktrees: queued work item has active session
   ✓ dispatch-circuit-breaker
   ✓ cron-tick-health
 ```

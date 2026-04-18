@@ -24,6 +24,9 @@ export type InboxItem = {
   key: string;
   kind: ItemKind;
   id: string;
+  // Human-friendly label preferred for display (e.g. `wi-42-foo`). Falls back
+  // to `id` when unset — sessions/signals/notifications have no display form.
+  displayLabel?: string;
   section: Section;
   urgency: Urgency;
   subject: string;

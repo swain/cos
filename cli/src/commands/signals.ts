@@ -6,6 +6,7 @@ import { runCalendarCollector } from "../collectors/calendar.js";
 import { collectClickupSignals } from "../collectors/clickup.js";
 import { collectSlackSignals } from "../collectors/slack.js";
 import { collectSentrySignals } from "../collectors/sentry.js";
+import { displayWorkItemId } from "../util.js";
 import type { Signal } from "../types.js";
 
 export const cmdSignalsList = (filter?: {
@@ -73,7 +74,7 @@ export const cmdSignalTriage = (
   }
   if (action === "work-item") {
     const wiId = `wi-${ulid()}`;
-    workItems.insert({
+    const { num, slug } = workItems.insert({
       id: wiId,
       title: opts.title ?? `${s.kind}: ${s.external_id ?? s.id}`,
       description: opts.description ?? JSON.stringify(s.payload, null, 2),
@@ -95,7 +96,10 @@ export const cmdSignalTriage = (
       status: "converted-to-work-item",
       triaged_at: new Date().toISOString(),
     });
-    console.log(chalk.green("→ work item"), wiId);
+    console.log(
+      chalk.green("→ work item"),
+      displayWorkItemId({ id: wiId, num, slug }),
+    );
     return;
   }
   if (action === "notify") {
