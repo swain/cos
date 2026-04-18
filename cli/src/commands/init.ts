@@ -8,7 +8,9 @@ import {
   DECISIONS_LOG,
   CONFIG_JSON,
   WATCHED_REPOS_JSON,
+  REVIEWS_DIR,
 } from "../util.js";
+import { ensureWeeklyRecurring } from "./review.js";
 
 export const cmdInit = () => {
   mkdirSync(COS_DIR, { recursive: true });
@@ -19,9 +21,11 @@ export const cmdInit = () => {
     "prompts",
     "bin",
     "launchd",
+    "reviews",
   ]) {
     mkdirSync(join(COS_DIR, d), { recursive: true });
   }
+  mkdirSync(REVIEWS_DIR, { recursive: true });
   getDb();
 
   if (!existsSync(STATUS_MD)) {
@@ -66,5 +70,6 @@ export const cmdInit = () => {
       ),
     );
   }
+  ensureWeeklyRecurring({ silent: true });
   console.log(chalk.green("COS initialized at"), COS_DIR);
 };
