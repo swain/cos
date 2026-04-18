@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { clearAll, openSeedDb, seedWorkItem } from "../helpers/seed.js";
 import { E2E_DB_PATH } from "../helpers/env.js";
 
-test("home page renders 200, titled, all 7 section classes present", async ({
+test("home page renders 200, titled, all 8 section classes present", async ({
   page,
   request,
 }) => {
@@ -24,6 +24,7 @@ test("home page renders 200, titled, all 7 section classes present", async ({
     "section-needsDecision",
     "section-active",
     "section-queue",
+    "section-ideas",
     "section-recentWins",
     "section-anomalies",
     "section-fyi",
