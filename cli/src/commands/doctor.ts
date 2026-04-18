@@ -206,6 +206,10 @@ const checkInvariant1Zombie = (opts: DoctorOptions): DoctorFinding => {
 };
 
 // Invariant 2: sessions marked running with last_heartbeat > threshold minutes.
+// Also kill the tmux window immediately. Leaving it alive blocks the next
+// dispatch on this WI (duplicate window name) and serves no diagnostic purpose —
+// the heartbeat is already stale, so whatever is in that window is either dead
+// or wedged.
 const checkInvariant2StaleHeartbeat = (opts: DoctorOptions): DoctorFinding => {
   const f = emptyFinding("stale-heartbeat");
   const cfg = readConfig();
@@ -228,12 +232,17 @@ const checkInvariant2StaleHeartbeat = (opts: DoctorOptions): DoctorFinding => {
       },
     });
     if (opts.autoFix && !opts.dryRun) {
+      const window = expectedTmuxWindow(s);
+      const killed = window ? killTmuxWindow(window) : false;
       sessionsApi.update(s.id, {
         status: "stale",
         notes: `${s.notes ? s.notes + "; " : ""}heartbeat stale (${age.toFixed(0)}m)`,
         ended_at: nowIso(),
       });
-      f.fixed.push({ id: s.id, action: "marked stale" });
+      f.fixed.push({
+        id: s.id,
+        action: killed ? "marked stale, tmux window killed" : "marked stale",
+      });
     }
   }
   return f;
@@ -307,6 +316,10 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
 };
 
 // Invariant 4: pr-open work items whose PR is actually merged/closed on GH.
+// When a PR is MERGED we also clean up the worktrees (git worktree remove on
+// each) and kill any lingering worker session for the WI. This runs on EVERY
+// tick (see runDoctor) so the reconciliation is not dependent on pr-merged
+// signals being collected.
 const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
   const f = emptyFinding("pr-status-drift");
   const items = workItems.list({ status: "pr-open" });
@@ -340,10 +353,86 @@ const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
       const patch: Record<string, unknown> = { status: newStatus };
       if (newStatus === "merged") patch.completed_at = mergedAt ?? nowIso();
       workItems.update(wi.id, patch as any);
-      f.fixed.push({ id: display, action: `reconciled to ${newStatus}` });
+
+      const extra: string[] = [];
+      if (newStatus === "merged") {
+        const removed = removeWorktrees(wi.worktree_paths);
+        if (removed.length) {
+          extra.push(`removed ${removed.length} worktree(s)`);
+          workItems.update(wi.id, { worktree_paths: {} });
+        }
+        const cancelled = cancelActiveSessionsForWi(wi.id);
+        if (cancelled.length)
+          extra.push(`cancelled ${cancelled.length} session(s)`);
+      }
+
+      const suffix = extra.length ? `; ${extra.join(", ")}` : "";
+      f.fixed.push({
+        id: display,
+        action: `reconciled to ${newStatus}${suffix}`,
+      });
     }
   }
   return f;
+};
+
+// Worktrees are created by cos worker-setup at <repo-parent>/<short>-worktrees/
+// <display-id>. `git worktree remove` must run from the main checkout, so we
+// resolve the main repo path the same way worker-setup does. Safe to call with
+// missing paths: returns only the paths we actually removed.
+const removeWorktrees = (paths: Record<string, string>): string[] => {
+  const removed: string[] = [];
+  for (const [repoRaw, wtPath] of Object.entries(paths)) {
+    if (!wtPath || !existsSync(wtPath)) continue;
+    const repoPath = findCosRepoLocalPath(repoRaw);
+    if (!repoPath) continue;
+    try {
+      execFileSync(
+        "git",
+        ["-C", repoPath, "worktree", "remove", "--force", wtPath],
+        {
+          stdio: "pipe",
+        },
+      );
+      removed.push(wtPath);
+    } catch {
+      // Ignore — worktree may have been removed manually or never created.
+    }
+  }
+  return removed;
+};
+
+const findCosRepoLocalPath = (remoteName: string): string | null => {
+  const reposBase = join(HOME, "Repos");
+  const short = remoteName.includes("/")
+    ? remoteName.split("/").pop()!
+    : remoteName;
+  const candidates = [
+    join(reposBase, short),
+    join(reposBase, "thegoodparty", short),
+  ];
+  for (const c of candidates) if (existsSync(join(c, ".git"))) return c;
+  return null;
+};
+
+const cancelActiveSessionsForWi = (workItemId: string): string[] => {
+  const cancelled: string[] = [];
+  const active = [
+    ...sessionsApi.list({ status: "running" }),
+    ...sessionsApi.list({ status: "starting" }),
+    ...sessionsApi.list({ status: "idle" }),
+  ].filter((s) => s.work_item_id === workItemId);
+  for (const s of active) {
+    const window = expectedTmuxWindow(s);
+    if (window) killTmuxWindow(window);
+    sessionsApi.update(s.id, {
+      status: "killed",
+      notes: `${s.notes ? s.notes + "; " : ""}cancelled on pr-merged`,
+      ended_at: nowIso(),
+    });
+    cancelled.push(s.id);
+  }
+  return cancelled;
 };
 
 // Invariant 5: work items marked queued but with an active session on them.
