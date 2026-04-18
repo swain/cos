@@ -22,7 +22,18 @@ Your job: deliver exactly this work item to an open PR, then exit. You are not a
 2. **Branch.** The worktree command already created a branch named `cos/{{WI_ID}}-<slug>` off the latest `develop` (or the repo's default branch, which is `develop` for GoodParty repos). Work on it. Do not switch branches.
 3. **Commit incrementally.** One logical unit per commit. Imperative subject lines ("Add…", "Fix…", "Update…"). Body explains _why_ when non-obvious. Each commit should compile and be reviewable in isolation.
 4. **Test before pushing.** Run tests and lint. If the repo has `npm run verify` or equivalent, use it. Don't open a PR with broken CI — fix or skip.
-5. **No self-approval.** Open the PR with `gh pr create --base develop`. Do not self-approve. Do not merge — _unless_ the **Self-merge policy** below applies to this repo.
+5. **Rebase, then open PR.** Before pushing and running `gh pr create`, sync onto the latest base branch so your PR doesn't land stale:
+
+   ```bash
+   # <base> is `main` for cos, `develop` for thegoodparty/* repos.
+   git fetch origin <base>
+   git rebase origin/<base>
+   ```
+
+   On success, `git push --force-with-lease` and open the PR with `gh pr create --base <base>`. Do not self-approve. Do not merge — _unless_ the **Self-merge policy** below applies to this repo.
+
+   If the rebase hits conflicts you can't resolve trivially: `git rebase --abort` and treat this as the stuck case (see "When you're stuck" below). Don't open a PR with an unrebased branch — it just forces another worker (or Po) to redo the work later.
+
 6. **Sequential PR gating.** This work item gets **one PR at a time**. If you've already opened a PR and got redirected back to this session to handle review comments or CI fixes, only make changes that address those — do not expand scope or open a second PR.
 7. **No `Co-Authored-By: Claude Code` in commits.** No `Created by Claude Code` footer on the PR body. This is a personal rule of the user's.
 8. **PR body explains why, not what.** Diffs show what; bodies explain motivation. Don't include a "Test plan" section — the user handles testing.
@@ -55,7 +66,29 @@ Concretely, when _and only when_ this work item's repo is `cos` (i.e. the worktr
      --body "<pr-url> — <what was surprising in 1–2 lines>"
    ```
    Then `cos worker-done <session-id> --pr-url <pr-url>` and exit. The user will make the call on the PR.
-6. **Self-merge.** If steps 1–4 all pass, merge:
+6. **Re-rebase onto `origin/main`.** Another cos worker may have merged between step 2 (PR open) and now. Sync once more so your merge doesn't clobber their work:
+
+   ```bash
+   git fetch origin main
+   git rebase origin/main
+   ```
+
+   - **Already up to date:** proceed to step 7.
+   - **Rebase replays cleanly with new upstream commits:** `git push --force-with-lease`, then re-check CI with `gh pr checks <pr-number> --repo swain/cos --watch` before merging. Only proceed once checks are green again.
+   - **Rebase hits conflicts:** abort the self-merge. Recover the branch, push a marker commit so the PR visibly reflects the conflict, and notify urgent:
+
+     ```bash
+     git rebase --abort
+     git commit --allow-empty -m "CONFLICT: rebase onto origin/main failed during self-merge — manual resolution required"
+     git push --force-with-lease
+     cos notify --urgency urgent \
+       --subject "cos PR conflicted during self-merge: <title>" \
+       --body "<pr-url> — rebase onto origin/main failed; manual resolution required."
+     ```
+
+     Then `cos worker-done <session-id> --pr-url <pr-url>` and exit. Do not attempt to merge.
+
+7. **Self-merge.** If steps 1–6 all pass, merge:
    ```bash
    gh pr merge <pr-number> --repo swain/cos --squash --delete-branch
    ```
