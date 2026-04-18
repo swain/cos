@@ -105,12 +105,17 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
     lines.push("");
   }
 
+  const titleFor = (work_item_id: string | null): string => {
+    if (!work_item_id) return "—";
+    return workItems.get(work_item_id)?.title ?? "—";
+  };
+
   if (f.active_sessions.length) {
     lines.push("## Active sessions");
     lines.push("");
     for (const s of f.active_sessions) {
       lines.push(
-        `- \`${s.id}\` wi=${s.work_item_id ?? "—"} kind=${s.kind} step=${s.current_step ?? "—"} hb=${s.last_heartbeat}`,
+        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${s.work_item_id ?? "—"}) kind=${s.kind} step=${s.current_step ?? "—"} hb=${s.last_heartbeat}`,
       );
     }
     lines.push("");
@@ -121,7 +126,7 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
     lines.push("");
     f.stale_sessions.forEach((s) =>
       lines.push(
-        `- \`${s.id}\` wi=${s.work_item_id ?? "—"} last=${s.last_heartbeat}`,
+        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${s.work_item_id ?? "—"}) last=${s.last_heartbeat}`,
       ),
     );
     lines.push("");
