@@ -20,6 +20,7 @@ import {
   cmdCollectCalendar,
   cmdCollectClickup,
   cmdCollectSlack,
+  cmdCollectSentry,
 } from "./commands/signals.js";
 import {
   cmdIdeasList,
@@ -258,6 +259,12 @@ program
   .command("collect-slack")
   .description("Run the Slack signal collector (DMs + @-mentions via MCP)")
   .action(() => cmdCollectSlack());
+
+program
+  .command("collect-sentry")
+  .description("Run the Sentry signal collector")
+  .option("--dry-run", "print what would be emitted without inserting", false)
+  .action((opts) => cmdCollectSentry({ dryRun: !!opts.dryRun }));
 
 program
   .command("ideas")

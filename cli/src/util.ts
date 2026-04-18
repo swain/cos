@@ -16,6 +16,7 @@ export const STATUS_MD = join(COS_DIR, "status.md");
 export const DECISIONS_LOG = join(COS_DIR, "decisions.log");
 export const CONFIG_JSON = join(COS_DIR, "config.json");
 export const WATCHED_REPOS_JSON = join(COS_DIR, "watched-repos.json");
+export const WATCHED_SERVICES_JSON = join(COS_DIR, "watched-services.json");
 
 export const CLAUDE_BIN = join(HOME, ".local/bin/claude");
 export const CLAUDE_PLUGIN_DIR = join(HOME, "Repos/claude-projects");

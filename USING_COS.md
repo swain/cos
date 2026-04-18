@@ -40,7 +40,8 @@ If you ever catch yourself forming a CLI command in your head, you're working to
   ▼                ▼              ▼              ▼
   launchd cron     /cos           /fleet         workers
   every 15 min     strategic      status         (tmux +
-  - collect GH     dialogue       digest         claude -p)
+  - collect GH+    dialogue       digest         claude -p)
+    Sentry
   - triage         (full persona                 per work item
   - dispatch        + context)
   - notify you
@@ -78,6 +79,27 @@ Nothing bypasses the queue:
 - **Work items** — committed, groomed work with scope + repos + priority + acceptance criteria.
 - **Sessions** — execution instances of a work item. One session = one worker = one tmux window = one `claude -p` process.
 - **PRs** — outputs of sessions. Gated by CI + your review + merge.
+
+## Signal sources
+
+Signals land in `fleet.db` from collectors that run at the top of every `cos tick`. Each collector is a small TS module under `cli/src/collectors/` and is idempotent — if the source hasn't changed, no new rows appear.
+
+### GitHub (`cli/src/collectors/github.ts`)
+
+Driven by `~/.claude/cos/watched-repos.json`. Emits `pr-needs-my-review`, `pr-ci-failed`, `pr-comments-on-mine`, `pr-merge-conflict`. Requires `gh` CLI auth.
+
+### Sentry (`cli/src/collectors/sentry.ts`)
+
+Driven by `~/.claude/cos/watched-services.json` (seeded at install with `goodparty` + `gp-api`, `gp-webapp`, `people-api`, `election-api`). Emits two signal kinds:
+
+- `sentry-new-error` — any new unresolved issue first-seen since the last tick. KV key `sentry:last-check:<org>/<project>` is the watermark. Dedup is by `permalink` so subsequent occurrences of the same issue don't re-fire.
+- `sentry-error-spike` — any unresolved issue with `>= spike_threshold_events` events in `spike_window` (default 50 in 15m). Dedup key folds in the window, so the same issue can spike again later.
+
+Requires `SENTRY_AUTH_TOKEN` in the environment that runs `cos tick` (the launchd plist; set it and re-bootstrap). Without the token, the collector logs a skip and emits nothing — the tick still runs.
+
+To tune: edit `~/.claude/cos/watched-services.json`. Each service entry can be a bare project slug (`"gp-api"`) or an object to override the org on a per-service basis (`{ "project": "foo", "org": "other-org" }`). Top-level knobs: `new_errors_window` (default `1h`), `spike_window` (default `15m`), `spike_threshold_events` (default `50`), `region_url` (default `https://us.sentry.io`).
+
+Smoke-test the collector without writing state: `cos collect-sentry --dry-run`. Real run: `cos collect-sentry`.
 
 ## Daily rhythm
 
@@ -369,7 +391,7 @@ COS uses `~/.local/bin/claude` directly (not the alias) so launchd and child pro
 Eventually you may want teammates on the same setup. The path:
 
 1. They clone the cos repo locally (e.g. `git clone https://github.com/swain/cos ~/Repos/cos`).
-2. Run `~/Repos/cos/install.sh` — symlinks shareable files into `~/.claude/`, copies starter templates for personal files (`team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `config.json`), builds the CLI, renders the launchd plist.
+2. Run `~/Repos/cos/install.sh` — symlinks shareable files into `~/.claude/`, copies starter templates for personal files (`team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `watched-services.json`, `config.json`), builds the CLI, renders the launchd plist.
 3. Fill in their own `team.md` and `priorities.md` — these are local-only and never committed.
 4. Edit `watched-repos.json` to match repos they actually work in.
 5. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<whoami>.cos.cron.plist` to start the cron.
@@ -396,6 +418,7 @@ cos signals [--status <s>] [--source <s>]
 cos signal-triage <sig-id> <action> ...   # action: suppress|idea|work-item|notify
 cos collect-github                # run github collector only
 cos collect-clickup               # run clickup collector only
+cos collect-sentry [--dry-run]    # run sentry collector only
 cos ideas [--status <s>]
 cos idea --title ... --description ...
 cos idea-promote <idea-id> --priority N --repos '[...]' --acceptance "..."

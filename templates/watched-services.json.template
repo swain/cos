@@ -1,0 +1,13 @@
+{
+  "org": "goodparty",
+  "region_url": "https://us.sentry.io",
+  "services": [
+    { "project": "gp-api" },
+    { "project": "gp-webapp" },
+    { "project": "people-api" },
+    { "project": "election-api" }
+  ],
+  "new_errors_window": "1h",
+  "spike_window": "15m",
+  "spike_threshold_events": 50
+}
