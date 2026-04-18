@@ -57,6 +57,7 @@ export const cmdInit = () => {
             "thegoodparty/people-api",
             "thegoodparty/gp-ai-projects",
             "thegoodparty/serve-ops",
+            { name: "swain/cos", base_branch: "main" },
           ],
           default_base_branch: "develop",
         },
