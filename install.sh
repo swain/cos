@@ -90,6 +90,7 @@ copy_template_if_missing "$REPO_ROOT/templates/priorities.md.template"      "$CO
 copy_template_if_missing "$REPO_ROOT/templates/arch.md.template"            "$COS_DIR/arch.md"
 copy_template_if_missing "$REPO_ROOT/templates/ai-native.md.template"       "$COS_DIR/ai-native.md"
 copy_template_if_missing "$REPO_ROOT/templates/watched-repos.json.template" "$COS_DIR/watched-repos.json"
+copy_template_if_missing "$REPO_ROOT/templates/watched-services.json.template" "$COS_DIR/watched-services.json"
 copy_template_if_missing "$REPO_ROOT/templates/config.json.template"        "$COS_DIR/config.json"
 [[ -e "$COS_DIR/decisions.log" ]] || : > "$COS_DIR/decisions.log"
 [[ -e "$COS_DIR/status.md" ]] || echo "# COS Status (pending first tick)" > "$COS_DIR/status.md"

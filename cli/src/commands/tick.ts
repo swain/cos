@@ -26,6 +26,7 @@ import {
 } from "../util.js";
 import { collectGithubSignals } from "../collectors/github.js";
 import { collectGrafanaSignals } from "../collectors/grafana.js";
+import { collectSentrySignals } from "../collectors/sentry.js";
 import { runCalendarCollector } from "../collectors/calendar.js";
 import { collectClickupSignals } from "../collectors/clickup.js";
 import { collectSlackSignals } from "../collectors/slack.js";
@@ -152,7 +153,35 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       );
     }
 
-    // 1c) Collect calendar + meeting-prep — spawns claude with MCP tools.
+    // 1c) Collect Sentry signals (new errors + error-rate spikes).
+    try {
+      const collected = await collectSentrySignals({ dryRun: !!opts.dryRun });
+      let inserted = 0;
+      for (const s of collected) {
+        const id = `sig-${ulid()}`;
+        const res = signals.insert({
+          id,
+          source: s.source,
+          kind: s.kind,
+          external_id: s.external_id,
+          payload: s.payload,
+          status: "new",
+          triaged_at: null,
+        });
+        if (res.inserted) inserted++;
+      }
+      console.error(
+        chalk.gray(
+          `[tick] sentry: ${inserted} new / ${collected.length} checked`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(
+        chalk.yellow(`[tick] sentry collection error: ${e.message}`),
+      );
+    }
+
+    // 1d) Collect calendar + meeting-prep — spawns claude with MCP tools.
     //     Writes prep files to ~/.claude/cos/meetings/, emits
     //     meeting-prep-ready signals, and records urgent notifications.
     //     Skipped in --dry-run because it is itself a claude invocation.

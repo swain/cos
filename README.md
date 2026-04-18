@@ -35,6 +35,7 @@ A persistent AI chief-of-staff system built on Claude Code primitives. Combines:
     ├── arch.md              (LOCAL — your stack)
     ├── ai-native.md         (LOCAL — your eval docs)
     ├── watched-repos.json   (LOCAL — repos COS monitors)
+    ├── watched-services.json (LOCAL — Sentry projects COS monitors)
     ├── config.json          (LOCAL — dispatch paused, daily cap, etc.)
     ├── fleet.db             (LOCAL — SQLite state)
     ├── decisions.log        (LOCAL — append-only cron history)
@@ -66,7 +67,7 @@ The installer:
 2. Symlinks shareable files into `~/.claude/cos/` (design, USING_COS, system, prompts, bin, cli, launchd).
 3. Symlinks the five slash commands into `~/.claude/commands/`.
 4. Symlinks `~/.claude/CLAUDE.md` to the repo's `CLAUDE.md.template` (so every Claude Code session boots as COS).
-5. Copies starter templates to `~/.claude/cos/team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `config.json` — **only if they don't exist yet**, so re-runs are safe.
+5. Copies starter templates to `~/.claude/cos/team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `watched-services.json`, `config.json` — **only if they don't exist yet**, so re-runs are safe.
 6. Installs npm deps + builds the CLI.
 7. Adds `~/.claude/cos/bin` to your `$PATH` (in `~/.zshrc`).
 8. Runs `cos init` to create `fleet.db`.
@@ -75,7 +76,7 @@ The installer:
 It does **NOT** automatically load the launchd agent. Do that manually after customizing your personal files:
 
 ```bash
-# Fill in team.md, priorities.md, arch.md, ai-native.md, watched-repos.json first.
+# Fill in team.md, priorities.md, arch.md, ai-native.md, watched-repos.json, watched-services.json first.
 
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.$(whoami).cos.cron.plist
 launchctl kickstart gui/$(id -u)/com.$(whoami).cos.cron
@@ -87,7 +88,8 @@ launchctl kickstart gui/$(id -u)/com.$(whoami).cos.cron
 2. **Architecture**: edit `~/.claude/cos/arch.md` with your stack (topology, auth, code style, deploy).
 3. **Ideas source**: edit `~/.claude/cos/ai-native.md` with pointers to your own repo evaluations.
 4. **Watched repos**: edit `~/.claude/cos/watched-repos.json` with repos COS should monitor for PRs needing your review, CI failures, etc.
-5. **Unpause dispatch** when you're ready for workers to start running autonomously:
+5. **Watched Sentry projects**: edit `~/.claude/cos/watched-services.json` with the Sentry org + project slugs you want monitored, and export `SENTRY_AUTH_TOKEN` in the shell that runs `cos tick` (i.e. the launchd plist) — without it the Sentry collector no-ops.
+6. **Unpause dispatch** when you're ready for workers to start running autonomously:
 
    ```bash
    jq '.dispatch_paused=false' ~/.claude/cos/config.json > /tmp/c && mv /tmp/c ~/.claude/cos/config.json
@@ -123,20 +125,20 @@ See `USING_COS.md` for the full guide (daily rhythm, notification types, anti-pa
 
 ## Repo layout
 
-| Path                                  | Purpose                                                                                                               |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `design.md`                           | Full architecture + state schema                                                                                      |
-| `implementation-plan.md`              | Step-by-step build plan (historical)                                                                                  |
-| `USING_COS.md`                        | Daily-use guide                                                                                                       |
-| `system.md`                           | Persona (loaded into every interaction)                                                                               |
-| `CLAUDE.md.template`                  | User-level Claude instructions                                                                                        |
-| `prompts/`                            | `cron.md` (every tick) and `worker.md` (every dispatch)                                                               |
-| `bin/`                                | `cos` shim, `cos-tick` (launchd wrapper), `spawn-worker`                                                              |
-| `cli/`                                | Node/TS CLI source (commander + better-sqlite3)                                                                       |
-| `commands/`                           | Slash command definitions (`/fleet`, `/enqueue`, `/cos`, `/groom`, `/dispatch`)                                       |
-| `launchd/com.cos.cron.plist.template` | LaunchAgent template (rendered by `install.sh`)                                                                       |
-| `templates/`                          | Starter files for personal `team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `config.json` |
-| `install.sh`                          | Bootstraps a fresh machine                                                                                            |
+| Path                                  | Purpose                                                                                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `design.md`                           | Full architecture + state schema                                                                                                               |
+| `implementation-plan.md`              | Step-by-step build plan (historical)                                                                                                           |
+| `USING_COS.md`                        | Daily-use guide                                                                                                                                |
+| `system.md`                           | Persona (loaded into every interaction)                                                                                                        |
+| `CLAUDE.md.template`                  | User-level Claude instructions                                                                                                                 |
+| `prompts/`                            | `cron.md` (every tick) and `worker.md` (every dispatch)                                                                                        |
+| `bin/`                                | `cos` shim, `cos-tick` (launchd wrapper), `spawn-worker`                                                                                       |
+| `cli/`                                | Node/TS CLI source (commander + better-sqlite3)                                                                                                |
+| `commands/`                           | Slash command definitions (`/fleet`, `/enqueue`, `/cos`, `/groom`, `/dispatch`)                                                                |
+| `launchd/com.cos.cron.plist.template` | LaunchAgent template (rendered by `install.sh`)                                                                                                |
+| `templates/`                          | Starter files for personal `team.md`, `priorities.md`, `arch.md`, `ai-native.md`, `watched-repos.json`, `watched-services.json`, `config.json` |
+| `install.sh`                          | Bootstraps a fresh machine                                                                                                                     |
 
 ## License
 
