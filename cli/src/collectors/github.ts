@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
-import { WATCHED_REPOS_JSON, parseJson } from "../util.js";
+import {
+  WATCHED_REPOS_JSON,
+  parseJson,
+  watchedRepoName,
+  type WatchedReposFile,
+} from "../util.js";
 
 export type CollectedSignal = {
   source: "github";
@@ -26,11 +31,11 @@ const gh = (args: string[]): any => {
 
 const getWatchedRepos = (): string[] => {
   if (!existsSync(WATCHED_REPOS_JSON)) return [];
-  const cfg = parseJson<{ repos: string[] }>(
+  const cfg = parseJson<WatchedReposFile>(
     readFileSync(WATCHED_REPOS_JSON, "utf8"),
-    { repos: [] },
+    {},
   );
-  return cfg.repos ?? [];
+  return (cfg.repos ?? []).map(watchedRepoName);
 };
 
 export const collectGithubSignals = async (): Promise<CollectedSignal[]> => {

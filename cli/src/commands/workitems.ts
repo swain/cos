@@ -14,6 +14,8 @@ import {
   WATCHED_REPOS_JSON,
   slugify,
   parseJson,
+  shortRepoName,
+  loadWatchedRepoBaseBranches,
 } from "../util.js";
 
 const HOME = homedir();
@@ -104,9 +106,7 @@ export const cmdWorkerDone = (
 
 const findRepoLocalPath = (remoteName: string): string | null => {
   const reposBase = join(HOME, "Repos");
-  const shortName = remoteName.includes("/")
-    ? remoteName.split("/").pop()!
-    : remoteName;
+  const shortName = shortRepoName(remoteName);
   // Check common locations
   const candidates = [
     join(reposBase, shortName),
@@ -124,6 +124,7 @@ const postSetupHook = (repoShort: string): string => {
     "election-api",
     "ops",
     "serve-ops",
+    "cos",
   ];
   if (tsRepos.includes(repoShort)) return "npm install --legacy-peer-deps";
   if (repoShort === "gp-ai-projects") return "uv sync";
@@ -136,22 +137,15 @@ export const cmdWorkerSetup = (workItemId: string) => {
     console.error(chalk.red(`work item not found: ${workItemId}`));
     process.exit(2);
   }
-  const cfg = parseJson<{ default_base_branch?: string }>(
-    readFileSync(WATCHED_REPOS_JSON, "utf8"),
-    {},
-  );
-  const baseBranch = cfg.default_base_branch ?? "develop";
+  const { defaultBaseBranch, baseBranchByShortName } =
+    loadWatchedRepoBaseBranches(WATCHED_REPOS_JSON);
   const slug = slugify(wi.title);
   const branch = `cos/${wi.id}-${slug}`;
   const out: Record<string, string> = {};
 
   for (const repoRaw of wi.repos) {
-    if (repoRaw === "cos") {
-      // Special case: COS itself. Worktree is just COS_DIR/cli for worker access.
-      out["cos"] = COS_DIR;
-      continue;
-    }
-    const short = repoRaw.includes("/") ? repoRaw.split("/").pop()! : repoRaw;
+    const short = shortRepoName(repoRaw);
+    const baseBranch = baseBranchByShortName[short] ?? defaultBaseBranch;
     const repoPath = findRepoLocalPath(repoRaw);
     if (!repoPath) {
       console.error(

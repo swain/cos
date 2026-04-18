@@ -1,7 +1,8 @@
 {
   "repos": [
     "owner/repo-1",
-    "owner/repo-2"
+    "owner/repo-2",
+    { "name": "owner/repo-with-different-base", "base_branch": "develop" }
   ],
   "default_base_branch": "main"
 }
