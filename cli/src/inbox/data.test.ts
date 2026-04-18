@@ -7,9 +7,18 @@ import { ulid } from "ulid";
 const tmp = mkdtempSync(join(tmpdir(), "cos-inbox-data-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
-import { collectDashboard } from "./data.js";
-import { markPrReviewed, dismissSession } from "./actions.js";
-import { getDb, workItems, sessions } from "../db.js";
+import { collectDashboard, collectIdeasStats } from "./data.js";
+import {
+  acceptAllSuggestKill,
+  acceptIdea,
+  deferIdea,
+  killIdea,
+  markPrReviewed,
+  promoteIdea,
+  dismissSession,
+} from "./actions.js";
+import { getDb, ideas, workItems, sessions } from "../db.js";
+import type { TriageVerdict } from "../types.js";
 
 afterAll(() => {
   getDb().close();
@@ -19,9 +28,42 @@ afterAll(() => {
 beforeEach(() => {
   const db = getDb();
   db.exec(
-    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log;",
+    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log; DELETE FROM ideas;",
   );
 });
+
+const insertScoredIdea = (
+  overrides: Partial<{
+    title: string;
+    description: string;
+    verdict: TriageVerdict;
+    rationale: string;
+    score: number;
+    confidence: number;
+    repos: string[];
+    status: string;
+  }> = {},
+) => {
+  const id = `idea-${ulid()}`;
+  ideas.insert({
+    id,
+    title: overrides.title ?? "an idea",
+    description: overrides.description ?? "desc",
+    source: "test",
+    confidence: overrides.confidence ?? 0.6,
+    repos_guess: overrides.repos ?? ["cos"],
+    status: (overrides.status as any) ?? "new",
+    promoted_to: null,
+  });
+  if (overrides.verdict) {
+    ideas.updateTriage(id, {
+      verdict: overrides.verdict,
+      rationale: overrides.rationale ?? "r",
+      score: overrides.score ?? 0.5,
+    });
+  }
+  return id;
+};
 
 const insertWi = (
   overrides: Partial<Parameters<typeof workItems.insert>[0]> = {},
@@ -99,6 +141,128 @@ describe("anomalyItems respects sessions.acked_at", () => {
     expect(collectDashboard().anomalies.some((i) => i.id === sessId)).toBe(
       false,
     );
+  });
+});
+
+describe("ideas section", () => {
+  it("hides unscored ideas from the rendered list", () => {
+    insertScoredIdea({ title: "unscored one" });
+    const d = collectDashboard();
+    expect(d.ideas).toHaveLength(0);
+    const stats = collectIdeasStats();
+    expect(stats.unscoredTotal).toBe(1);
+    expect(stats.scoredTotal).toBe(0);
+  });
+
+  it("sorts your-call first, then suggest-* by score desc", () => {
+    insertScoredIdea({
+      title: "promote-high",
+      verdict: "suggest-promote",
+      score: 0.9,
+    });
+    insertScoredIdea({
+      title: "your-call-mid",
+      verdict: "your-call",
+      score: 0.4,
+    });
+    insertScoredIdea({
+      title: "kill-mid",
+      verdict: "suggest-kill",
+      score: 0.5,
+    });
+    const d = collectDashboard();
+    // your-call is the user's decision surface and sorts first.
+    expect(d.ideas[0].ideaMeta?.verdict).toBe("your-call");
+    // Below your-call, promote/kill interleave by score desc — 0.9 > 0.5.
+    expect(d.ideas[1].ideaMeta?.verdict).toBe("suggest-promote");
+    expect(d.ideas[2].ideaMeta?.verdict).toBe("suggest-kill");
+  });
+
+  it("reports scored + unscored counts in stats", () => {
+    insertScoredIdea({ verdict: "suggest-promote", score: 0.8 });
+    insertScoredIdea();
+    insertScoredIdea();
+    const stats = collectIdeasStats();
+    expect(stats.scoredTotal).toBe(1);
+    expect(stats.unscoredTotal).toBe(2);
+  });
+});
+
+describe("idea actions", () => {
+  it("acceptIdea promotes a suggest-promote idea to a queued work item", async () => {
+    const id = insertScoredIdea({
+      title: "promote me",
+      verdict: "suggest-promote",
+      score: 0.9,
+    });
+    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(true);
+
+    const r = await acceptIdea(id);
+    expect(r.ok).toBe(true);
+
+    const idea = ideas.get(id);
+    expect(idea?.status).toBe("promoted");
+    expect(idea?.promoted_to).toBeTruthy();
+    const wi = workItems.get(idea!.promoted_to!);
+    expect(wi?.status).toBe("queued");
+
+    // Section rerenders without the promoted row.
+    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(false);
+  });
+
+  it("acceptIdea kills a suggest-kill idea", async () => {
+    const id = insertScoredIdea({
+      title: "kill me",
+      verdict: "suggest-kill",
+      score: 0.8,
+    });
+    const r = await acceptIdea(id);
+    expect(r.ok).toBe(true);
+    expect(ideas.get(id)?.status).toBe("killed");
+    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(false);
+  });
+
+  it("acceptIdea refuses your-call verdict", async () => {
+    const id = insertScoredIdea({
+      title: "judge me",
+      verdict: "your-call",
+    });
+    const r = await acceptIdea(id);
+    expect(r.ok).toBe(false);
+    expect(ideas.get(id)?.status).toBe("new");
+  });
+
+  it("promoteIdea / killIdea / deferIdea transition status correctly", async () => {
+    const a = insertScoredIdea({ title: "a", verdict: "your-call" });
+    const b = insertScoredIdea({ title: "b", verdict: "your-call" });
+    const c = insertScoredIdea({ title: "c", verdict: "your-call" });
+
+    expect((await promoteIdea(a)).ok).toBe(true);
+    expect(ideas.get(a)?.status).toBe("promoted");
+
+    expect((await killIdea(b)).ok).toBe(true);
+    expect(ideas.get(b)?.status).toBe("killed");
+
+    expect((await deferIdea(c)).ok).toBe(true);
+    expect(ideas.get(c)?.status).toBe("deferred");
+  });
+
+  it("acceptAllSuggestKill is a two-step confirm", async () => {
+    insertScoredIdea({ verdict: "suggest-kill", score: 0.8 });
+    insertScoredIdea({ verdict: "suggest-kill", score: 0.7 });
+    insertScoredIdea({ verdict: "suggest-promote", score: 0.8 });
+
+    const first = await acceptAllSuggestKill(false);
+    expect(first.ok).toBe(false);
+    expect(first.message).toMatch(/confirm/);
+    // No status changed yet.
+    expect(ideas.list({ status: "killed" })).toHaveLength(0);
+
+    const second = await acceptAllSuggestKill(true);
+    expect(second.ok).toBe(true);
+    expect(ideas.list({ status: "killed" })).toHaveLength(2);
+    // suggest-promote untouched.
+    expect(ideas.list({ status: "new" })).toHaveLength(1);
   });
 });
 

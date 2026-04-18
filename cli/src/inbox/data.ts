@@ -6,12 +6,15 @@ import {
   workItems,
   cronTicks,
   cosLog,
+  ideas,
 } from "../db.js";
 import { displayWorkItemId } from "../util.js";
-import type { WorkItem } from "../types.js";
+import type { Idea, TriageVerdict, WorkItem } from "../types.js";
 import {
   flattenDashboard,
+  IDEAS_TOP_N,
   SECTION_LIMIT,
+  type IdeasSectionStats,
   type InboxDashboard,
   type InboxItem,
 } from "./types.js";
@@ -258,6 +261,75 @@ const queueItems = (): InboxItem[] => {
   }));
 };
 
+// Sort scored ideas the way the user wants to see them: "your-call" first
+// (that's the decision surface), then promote/kill interleaved by score
+// desc. Confidence tiebreaks within a verdict bucket.
+const verdictRank = (v: TriageVerdict | null): number => {
+  if (v === "your-call") return 0;
+  return 1;
+};
+
+const sortIdeasForDashboard = (scored: Idea[]): Idea[] =>
+  [...scored].sort((a, b) => {
+    const va = verdictRank(a.triage_verdict as TriageVerdict | null);
+    const vb = verdictRank(b.triage_verdict as TriageVerdict | null);
+    if (va !== vb) return va - vb;
+    if (va === 0) {
+      // your-call: confidence desc, then score desc as a stable tiebreak.
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      return (b.triage_score ?? 0) - (a.triage_score ?? 0);
+    }
+    // promote/kill: score desc, confidence as tiebreak.
+    const sa = a.triage_score ?? 0;
+    const sb = b.triage_score ?? 0;
+    if (sb !== sa) return sb - sa;
+    return b.confidence - a.confidence;
+  });
+
+const ideaSubject = (idea: Idea): string => {
+  const title =
+    idea.title.length > 140 ? idea.title.slice(0, 137) + "…" : idea.title;
+  return title;
+};
+
+// Returns the full sorted list of scored ideas plus a stats sidecar (unscored
+// count lives here because the renderer surfaces it separately in the "show N
+// more" line, while section-item code stays uniform across sections).
+const ideaItems = (): { items: InboxItem[]; stats: IdeasSectionStats } => {
+  const all = ideas.list({ status: "new" });
+  const scored = all.filter(
+    (i) => i.triaged_at !== null && i.triage_verdict !== null,
+  );
+  const unscored = all.length - scored.length;
+  const sorted = sortIdeasForDashboard(scored);
+  const items: InboxItem[] = sorted.map((i) => ({
+    key: `idea:${i.id}`,
+    kind: "idea" as const,
+    id: i.id,
+    section: "ideas" as const,
+    urgency: "normal" as const,
+    subject: ideaSubject(i),
+    body: i.triage_rationale ?? trimBody(i.description, 160),
+    related_ids: [],
+    created_at: i.created_at,
+    ideaMeta: {
+      verdict: i.triage_verdict as TriageVerdict,
+      rationale: i.triage_rationale ?? "",
+      score: i.triage_score ?? 0,
+      confidence: i.confidence,
+      repos_guess: i.repos_guess,
+    },
+  }));
+  return {
+    items,
+    stats: {
+      topN: IDEAS_TOP_N,
+      scoredTotal: scored.length,
+      unscoredTotal: unscored,
+    },
+  };
+};
+
 const recentWinItems = (): InboxItem[] => {
   const cutoff = Date.now() - RECENT_WIN_WINDOW_MS;
   const wins: WorkItem[] = [
@@ -345,18 +417,26 @@ const notificationTail = (
 export const collectDashboard = (): InboxDashboard => {
   const titles = wiTitleMap();
   const displayIds = wiDisplayIdMap();
+  const ideas = ideaItems();
   return {
     needsDecision: needsDecisionItems().sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     ),
     active: activeItems(titles, displayIds),
     queue: queueItems(),
+    ideas: ideas.items,
     recentWins: recentWinItems(),
     anomalies: anomalyItems(displayIds),
     fyi: notificationTail("normal", "fyi").slice(0, SECTION_LIMIT),
     digest: notificationTail("digest", "digest").slice(0, SECTION_LIMIT),
   };
 };
+
+// Returned alongside the dashboard so the renderer can show "show N more"
+// with both the trimmed-scored count and the still-to-be-triaged count.
+// Kept separate from InboxDashboard so the generic flatten / section loop
+// stays clean (flattenDashboard only cares about items).
+export const collectIdeasStats = (): IdeasSectionStats => ideaItems().stats;
 
 export const collectInbox = (): InboxItem[] =>
   flattenDashboard(collectDashboard());
