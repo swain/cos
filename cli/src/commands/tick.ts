@@ -46,7 +46,7 @@ Your job this tick, in order:
    - If it is a clear actionable work item: \`cos signal-triage <id> work-item --title "..." --description "..." --priority <1-5> --repos '["repo"]' --acceptance "..."\`
    - PR-needs-my-review signals: ALWAYS notify urgent so the user sees them.
    - PR-ci-failed on my own PRs: create a work item at priority 2 to fix the failure, with the PR URL in the description.
-   - PR-comments-on-mine: create a work item at priority 2 to address comments, unless the PR is already in pr-open state for a work item, in which case notify urgent to the user.
+   - PR-comments-on-mine: if the PR already has a pr-open work item, run \`cos dispatch <wi-id> --force\` (the worker picks up fix-comments mode automatically) and suppress the signal; notify normal so the user sees reviewer activity. If no matching work item exists, create one at priority 2 to address comments.
    - PR-merged: suppress (it's handled by the worker-done flow) or notify digest.
 
 2. DISPATCH ready work items. For each queued work item eligible for auto-dispatch (config.json auto_dispatch_max_priority and dispatch_paused apply), run \`cos dispatch <wi-id>\`. No daily cap — dispatch every eligible item.
