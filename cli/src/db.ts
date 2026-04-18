@@ -307,7 +307,12 @@ export const sessions = {
       .get(id) as any;
     return r ? rowToSession(r) : null;
   },
-  list(filter?: { status?: string; kind?: string }): Session[] {
+  list(filter?: {
+    status?: string;
+    kind?: string;
+    startedSince?: string;
+    startedBefore?: string;
+  }): Session[] {
     let sql = "SELECT * FROM sessions WHERE 1=1";
     const params: any = {};
     if (filter?.status) {
@@ -317,6 +322,14 @@ export const sessions = {
     if (filter?.kind) {
       sql += " AND kind = @kind";
       params.kind = filter.kind;
+    }
+    if (filter?.startedSince) {
+      sql += " AND started_at >= @startedSince";
+      params.startedSince = filter.startedSince;
+    }
+    if (filter?.startedBefore) {
+      sql += " AND started_at < @startedBefore";
+      params.startedBefore = filter.startedBefore;
     }
     sql += " ORDER BY started_at DESC";
     return (getDb().prepare(sql).all(params) as any[]).map(rowToSession);

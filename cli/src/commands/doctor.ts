@@ -22,6 +22,7 @@ const TMUX_SESSION = "cos-workers";
 const DEFAULT_STALE_MINUTES = 20;
 const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
+const DEFAULT_SESSION_ARCHIVE_DAYS = 7;
 
 const COS_REPO_PATH = join(HOME, "Repos/cos");
 const COS_SHAREABLE_DIRS = ["prompts", "cli/src", "bin", "launchd"];
@@ -87,6 +88,7 @@ const readConfig = (): {
   dispatch_paused?: boolean;
   stale_heartbeat_minutes?: number;
   auto_dispatch_max_priority?: number;
+  session_archive_days?: number;
   [k: string]: unknown;
 } => {
   if (!existsSync(CONFIG_JSON)) return {};
@@ -648,6 +650,52 @@ export const checkInvariant9StrandedWorkItem = (
   return f;
 };
 
+// Invariant 10: sessions in terminal states (stale/killed/failed) older than
+// threshold days are archived so the hot-path fleet queries stay small.
+const checkInvariant10OldSessionArchive = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("old-session-archive", "info");
+  const cfg = readConfig();
+  const days = cfg.session_archive_days ?? DEFAULT_SESSION_ARCHIVE_DAYS;
+  const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+  const stale = sessionsApi.list({
+    status: "stale",
+    startedBefore: cutoff,
+  });
+  const killed = sessionsApi.list({
+    status: "killed",
+    startedBefore: cutoff,
+  });
+  const failed = sessionsApi.list({
+    status: "failed",
+    startedBefore: cutoff,
+  });
+  const candidates = [...stale, ...killed, ...failed];
+  if (!candidates.length) return f;
+  f.ok = false;
+  for (const s of candidates) {
+    f.entries.push({
+      id: s.id,
+      reason: `session in ${s.status} older than ${days}d`,
+      details: {
+        status: s.status,
+        started_at: s.started_at,
+        ended_at: s.ended_at,
+        work_item_id: s.work_item_id,
+      },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      sessionsApi.update(s.id, {
+        status: "archived",
+        notes: `${s.notes ? s.notes + "; " : ""}archived from ${s.status} (>${days}d)`,
+      });
+      f.fixed.push({ id: s.id, action: `status ${s.status} → archived` });
+    }
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -659,6 +707,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant7TickHealth(opts),
     checkInvariant8GitSyncDrift(opts),
     checkInvariant9StrandedWorkItem(opts),
+    checkInvariant10OldSessionArchive(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);
