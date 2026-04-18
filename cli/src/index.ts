@@ -38,6 +38,7 @@ import { cmdDoctor } from "./commands/doctor.js";
 import { cmdLogAppend } from "./commands/log.js";
 import { cmdInbox } from "./commands/inbox.js";
 import { cmdInboxServe } from "./commands/inbox-serve.js";
+import { cmdDashboard } from "./commands/dashboard.js";
 import { cmdPeek } from "./commands/peek.js";
 import {
   cmdRecurringList,
@@ -397,6 +398,13 @@ program
   .command("inbox-serve")
   .description("Start the local inbox HTTP server at 127.0.0.1:4411")
   .action(() => cmdInboxServe());
+
+program
+  .command("dashboard")
+  .description(
+    "Open the inbox web UI (http://127.0.0.1:4411) in the default browser; kickstart the launchd job if stopped",
+  )
+  .action(() => cmdDashboard());
 
 program
   .command("peek [target]")
