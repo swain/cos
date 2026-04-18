@@ -299,6 +299,21 @@ export const cmdDispatch = (
       );
       process.exit(3);
     }
+    for (const depId of wi.depends_on) {
+      const dep = workItems.get(depId);
+      if (!dep) {
+        console.error(
+          chalk.yellow(`skipped: waiting on ${depId} (status=missing)`),
+        );
+        process.exit(3);
+      }
+      if (dep.status !== "merged" && dep.status !== "done") {
+        console.error(
+          chalk.yellow(`skipped: waiting on ${depId} (status=${dep.status})`),
+        );
+        process.exit(3);
+      }
+    }
     // Check existing sessions on this work item
     const existing = [
       ...sessions.list({ status: "running" }),
@@ -350,4 +365,41 @@ export const cmdWorkerPrimaryWorktree = (workItemId: string) => {
   if (!wi) process.exit(2);
   const first = Object.values(wi.worktree_paths)[0];
   process.stdout.write(first ?? HOME);
+};
+
+export const cmdWorkItemSetDeps = (
+  workItemId: string,
+  opts: { add?: string[]; remove?: string[] },
+) => {
+  const wi = workItems.get(workItemId);
+  if (!wi) {
+    console.error(chalk.red(`work item not found: ${workItemId}`));
+    process.exit(2);
+  }
+  const add = opts.add ?? [];
+  const remove = opts.remove ?? [];
+  if (!add.length && !remove.length) {
+    console.error(chalk.yellow("nothing to do: pass --add and/or --remove"));
+    process.exit(2);
+  }
+  for (const id of [...add, ...remove]) {
+    if (id === workItemId) {
+      console.error(chalk.red(`cannot depend on self: ${id}`));
+      process.exit(2);
+    }
+    if (!workItems.get(id)) {
+      console.error(chalk.red(`dep not found: ${id}`));
+      process.exit(2);
+    }
+  }
+  const current = new Set(wi.depends_on);
+  for (const id of remove) current.delete(id);
+  for (const id of add) current.add(id);
+  const next = Array.from(current);
+  workItems.update(workItemId, { depends_on: next });
+  console.log(
+    chalk.green("deps updated"),
+    workItemId,
+    chalk.gray(`depends_on=${JSON.stringify(next)}`),
+  );
 };
