@@ -9,12 +9,30 @@ import {
   cosLog,
 } from "../db.js";
 import { STATUS_MD, nowIso } from "../util.js";
+import type { WorkItem } from "../types.js";
+
+export type LastFailure = {
+  reason: string;
+  session_id: string;
+  at: string | null;
+};
+
+export type ActiveStep = {
+  session_id: string;
+  step: string | null;
+  heartbeat: string;
+};
+
+export type EnrichedWorkItem = WorkItem & {
+  last_failure?: LastFailure;
+  active_step?: ActiveStep;
+};
 
 export type FleetSummary = {
-  queued: ReturnType<typeof workItems.list>;
-  in_progress: ReturnType<typeof workItems.list>;
-  pr_open: ReturnType<typeof workItems.list>;
-  blocked: ReturnType<typeof workItems.list>;
+  queued: EnrichedWorkItem[];
+  in_progress: EnrichedWorkItem[];
+  pr_open: EnrichedWorkItem[];
+  blocked: EnrichedWorkItem[];
   active_sessions: ReturnType<typeof sessions.list>;
   stale_sessions: ReturnType<typeof sessions.list>;
   new_signals_count: number;
@@ -23,11 +41,39 @@ export type FleetSummary = {
   last_tick_at: string | null;
 };
 
+const enrichBlocked = (wi: WorkItem): EnrichedWorkItem => {
+  const s = sessions.latestForWorkItem(wi.id, "failed");
+  if (!s || !s.notes) return wi;
+  return {
+    ...wi,
+    last_failure: {
+      reason: s.notes,
+      session_id: s.id,
+      at: s.ended_at,
+    },
+  };
+};
+
+const enrichInProgress = (wi: WorkItem): EnrichedWorkItem => {
+  const s = sessions.latestForWorkItem(wi.id);
+  if (!s) return wi;
+  return {
+    ...wi,
+    active_step: {
+      session_id: s.id,
+      step: s.current_step,
+      heartbeat: s.last_heartbeat,
+    },
+  };
+};
+
 export const collectFleet = (): FleetSummary => {
   const queued = workItems.list({ status: "queued" });
-  const in_progress = workItems.list({ status: "in-progress" });
+  const in_progress = workItems
+    .list({ status: "in-progress" })
+    .map(enrichInProgress);
   const pr_open = workItems.list({ status: "pr-open" });
-  const blocked = workItems.list({ status: "blocked" });
+  const blocked = workItems.list({ status: "blocked" }).map(enrichBlocked);
   const all_active = [
     ...sessions.list({ status: "running" }),
     ...sessions.list({ status: "starting" }),
@@ -69,7 +115,7 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   lines.push(`- Last cron tick: ${f.last_tick_at ?? "_never_"}`);
   lines.push("");
 
-  const fmtWI = (wi: (typeof f.queued)[number]) =>
+  const fmtWI = (wi: EnrichedWorkItem) =>
     `- \`${wi.id}\` **P${wi.priority}** ${wi.title} _[${wi.repos.join(", ") || "—"}]_`;
 
   if (f.pr_open.length) {
@@ -85,14 +131,29 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   if (f.in_progress.length) {
     lines.push("## In progress");
     lines.push("");
-    f.in_progress.forEach((wi) => lines.push(fmtWI(wi)));
+    for (const wi of f.in_progress) {
+      lines.push(fmtWI(wi));
+      if (wi.active_step) {
+        lines.push(
+          `  - step: \`${wi.active_step.step ?? "—"}\` (hb: ${wi.active_step.heartbeat}, sess \`${wi.active_step.session_id}\`)`,
+        );
+      }
+    }
     lines.push("");
   }
 
   if (f.blocked.length) {
     lines.push("## Blocked");
     lines.push("");
-    f.blocked.forEach((wi) => lines.push(fmtWI(wi)));
+    for (const wi of f.blocked) {
+      lines.push(fmtWI(wi));
+      if (wi.last_failure) {
+        lines.push(`  - failed: ${wi.last_failure.reason}`);
+        lines.push(
+          `  - session: \`${wi.last_failure.session_id}\` at ${wi.last_failure.at ?? "—"}`,
+        );
+      }
+    }
     lines.push("");
   }
 

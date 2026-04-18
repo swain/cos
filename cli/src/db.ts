@@ -313,6 +313,17 @@ export const sessions = {
     sql += " ORDER BY started_at DESC";
     return (getDb().prepare(sql).all(params) as any[]).map(rowToSession);
   },
+  latestForWorkItem(workItemId: string, status?: string): Session | null {
+    let sql = "SELECT * FROM sessions WHERE work_item_id = @wi";
+    const params: any = { wi: workItemId };
+    if (status) {
+      sql += " AND status = @status";
+      params.status = status;
+    }
+    sql += " ORDER BY started_at DESC LIMIT 1";
+    const r = getDb().prepare(sql).get(params) as any;
+    return r ? rowToSession(r) : null;
+  },
   heartbeat(id: string, step?: string) {
     getDb()
       .prepare(
