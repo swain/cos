@@ -98,7 +98,7 @@ program
 program
   .command("fleet")
   .description("Show fleet status")
-  .option("--format <md|json>", "output format", "md")
+  .option("--format <table|md|json>", "output format", "table")
   .option("--write-status", "also write ~/.claude/cos/status.md", false)
   .action((opts) => cmdFleet(opts.format, opts.writeStatus));
 
