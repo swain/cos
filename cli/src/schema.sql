@@ -14,11 +14,14 @@ CREATE TABLE IF NOT EXISTS work_items (
   pr_urls             TEXT NOT NULL DEFAULT '[]',
   worklog_path        TEXT,
   worktree_paths      TEXT NOT NULL DEFAULT '{}',
+  parent_id           TEXT,
+  needs_planning      INTEGER NOT NULL DEFAULT 0,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_work_items_status_priority ON work_items(status, priority);
+CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id);
 
 CREATE TABLE IF NOT EXISTS ideas (
   id           TEXT PRIMARY KEY,

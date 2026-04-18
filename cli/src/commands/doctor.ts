@@ -696,6 +696,51 @@ const checkInvariant10OldSessionArchive = (
   return f;
 };
 
+// Invariant 11: parent work items whose children have all merged/done roll up
+// to done. The parent is a planning container (see `cos plan`) — its job is
+// finished once every chunk has landed. Without this, planned parents stay
+// queued/blocked forever with stale session_id=null rows cluttering fleet.
+const DONE_STATUSES = new Set(["merged", "done"]);
+export const checkInvariant11PlannedParentRollup = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("planned-parent-rollup");
+  const parentIds = new Set<string>();
+  for (const wi of workItems.list()) {
+    if (wi.parent_id) parentIds.add(wi.parent_id);
+  }
+  for (const parentId of parentIds) {
+    const parent = workItems.get(parentId);
+    if (!parent) continue;
+    if (DONE_STATUSES.has(parent.status) || parent.status === "abandoned")
+      continue;
+    const children = workItems.listChildren(parentId);
+    if (!children.length) continue;
+    const allDone = children.every((c) => DONE_STATUSES.has(c.status));
+    if (!allDone) continue;
+    f.ok = false;
+    f.entries.push({
+      id: parentId,
+      reason: `all ${children.length} child work item(s) merged; parent still ${parent.status}`,
+      details: {
+        children: children.map((c) => ({ id: c.id, status: c.status })),
+      },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      workItems.update(parentId, {
+        status: "done",
+        session_id: null,
+        completed_at: nowIso(),
+      });
+      f.fixed.push({
+        id: parentId,
+        action: "status → done (all children merged)",
+      });
+    }
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -708,6 +753,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant8GitSyncDrift(opts),
     checkInvariant9StrandedWorkItem(opts),
     checkInvariant10OldSessionArchive(opts),
+    checkInvariant11PlannedParentRollup(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);

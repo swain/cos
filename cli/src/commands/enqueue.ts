@@ -11,6 +11,9 @@ export type EnqueueArgs = {
   priority: number;
   source?: string;
   status?: WorkItemStatus;
+  parentId?: string | null;
+  needsPlanning?: boolean;
+  dependsOn?: string[];
 };
 
 export const cmdEnqueue = (args: EnqueueArgs): string => {
@@ -24,12 +27,14 @@ export const cmdEnqueue = (args: EnqueueArgs): string => {
     priority: args.priority,
     status: args.status ?? "queued",
     source: args.source ?? "user",
-    depends_on: [],
+    depends_on: args.dependsOn ?? [],
     session_id: null,
     pr_urls: [],
     worklog_path: null,
     worktree_paths: {},
     needs_approval: false,
+    parent_id: args.parentId ?? null,
+    needs_planning: args.needsPlanning ?? false,
   });
   console.log(
     chalk.green("enqueued"),

@@ -27,6 +27,8 @@ export const WorkItemSchema = z.object({
   worktree_paths: z.record(z.string(), z.string()),
   needs_approval: z.boolean(),
   inbox_acked_at: z.string().nullable().optional(),
+  parent_id: z.string().nullable(),
+  needs_planning: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
   completed_at: z.string().nullable(),

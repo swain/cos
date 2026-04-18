@@ -68,6 +68,8 @@ const insertWorkItem = (overrides: {
     worklog_path: null,
     worktree_paths: overrides.worktree_paths ?? { cos: "/tmp/wt/cos" },
     needs_approval: false,
+    parent_id: null,
+    needs_planning: false,
   });
   return id;
 };
