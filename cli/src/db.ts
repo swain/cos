@@ -72,6 +72,17 @@ const migrate = (db: Database.Database) => {
   if (!hasColumn(db, "work_items", "inbox_acked_at")) {
     db.exec(`ALTER TABLE work_items ADD COLUMN inbox_acked_at TEXT`);
   }
+  if (!hasColumn(db, "work_items", "parent_id")) {
+    db.exec(`ALTER TABLE work_items ADD COLUMN parent_id TEXT`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id)`,
+    );
+  }
+  if (!hasColumn(db, "work_items", "needs_planning")) {
+    db.exec(
+      `ALTER TABLE work_items ADD COLUMN needs_planning INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
 };
 
 const rowToWorkItem = (r: any): WorkItem => ({
@@ -90,6 +101,8 @@ const rowToWorkItem = (r: any): WorkItem => ({
   worktree_paths: parseJson<Record<string, string>>(r.worktree_paths, {}),
   needs_approval: !!r.needs_approval,
   inbox_acked_at: r.inbox_acked_at ?? null,
+  parent_id: r.parent_id ?? null,
+  needs_planning: !!r.needs_planning,
   created_at: r.created_at,
   updated_at: r.updated_at,
   completed_at: r.completed_at,
@@ -147,8 +160,8 @@ export const workItems = {
   insert(wi: Omit<WorkItem, "created_at" | "updated_at" | "completed_at">) {
     const db = getDb();
     db.prepare(
-      `INSERT INTO work_items (id, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths, needs_approval)
-       VALUES (@id, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths, @needs_approval)`,
+      `INSERT INTO work_items (id, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths, needs_approval, parent_id, needs_planning)
+       VALUES (@id, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths, @needs_approval, @parent_id, @needs_planning)`,
     ).run({
       ...wi,
       repos: JSON.stringify(wi.repos),
@@ -156,6 +169,8 @@ export const workItems = {
       pr_urls: JSON.stringify(wi.pr_urls),
       worktree_paths: JSON.stringify(wi.worktree_paths),
       needs_approval: wi.needs_approval ? 1 : 0,
+      parent_id: wi.parent_id ?? null,
+      needs_planning: wi.needs_planning ? 1 : 0,
     });
   },
   get(id: string): WorkItem | null {
@@ -178,6 +193,15 @@ export const workItems = {
     sql += " ORDER BY priority ASC, created_at ASC";
     return (getDb().prepare(sql).all(params) as any[]).map(rowToWorkItem);
   },
+  listChildren(parentId: string): WorkItem[] {
+    return (
+      getDb()
+        .prepare(
+          "SELECT * FROM work_items WHERE parent_id = ? ORDER BY created_at ASC",
+        )
+        .all(parentId) as any[]
+    ).map(rowToWorkItem);
+  },
   update(id: string, patch: Partial<WorkItem>) {
     const sets: string[] = [];
     const params: any = { id };
@@ -187,6 +211,7 @@ export const workItems = {
       pr_urls: JSON.stringify,
       worktree_paths: JSON.stringify,
       needs_approval: (v: boolean) => (v ? 1 : 0),
+      needs_planning: (v: boolean) => (v ? 1 : 0),
     };
     for (const [k, v] of Object.entries(patch)) {
       if (k === "id" || v === undefined) continue;
