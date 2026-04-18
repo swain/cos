@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import chalk from "chalk";
 import {
   cosLog,
+  cronTicks,
   signals,
   workItems,
   sessions as sessionsApi,
@@ -64,121 +65,140 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
   const startedAt = nowIso();
   console.error(chalk.gray(`[tick ${tickId}] start ${startedAt}`));
 
-  // 0) Doctor — run system invariants and auto-fix before anything else.
-  //    Runs even in --dry-run mode for the tick: the tick's dry-run only
-  //    skips invoking claude, but doctor's own dry-run is independent.
-  let doctorReport: DoctorReport | null = null;
-  try {
-    doctorReport = runDoctor({
-      autoFix: !opts.dryRun,
-      dryRun: !!opts.dryRun,
-      format: "json",
-    });
-    console.error(
-      chalk.gray(
-        `[tick] doctor: ${doctorReport.summary.issues} issue(s), fixed=${doctorReport.summary.fixed}, notified=${doctorReport.summary.notified}`,
-      ),
-    );
-  } catch (e: any) {
-    console.error(chalk.yellow(`[tick] doctor error: ${e.message}`));
-  }
+  // Mark the tick as in-progress in the DB before any work runs. This is
+  // what `cos fleet` and the inbox use to show "Cron tick in progress"
+  // instead of just the last completed timestamp. Skip the marker in
+  // --dry-run so preview runs do not pollute the UI.
+  if (!opts.dryRun) cronTicks.start(tickId);
+  let rc: number | null = null;
 
-  // 1) Collect GitHub signals
   try {
-    const collected = await collectGithubSignals();
-    let inserted = 0;
-    for (const s of collected) {
-      const id = `sig-${ulid()}`;
-      const res = signals.insert({
-        id,
-        source: s.source,
-        kind: s.kind,
-        external_id: s.external_id,
-        payload: s.payload,
-        status: "new",
-        triaged_at: null,
+    // 0) Doctor — run system invariants and auto-fix before anything else.
+    //    Runs even in --dry-run mode for the tick: the tick's dry-run only
+    //    skips invoking claude, but doctor's own dry-run is independent.
+    let doctorReport: DoctorReport | null = null;
+    try {
+      doctorReport = runDoctor({
+        autoFix: !opts.dryRun,
+        dryRun: !!opts.dryRun,
+        format: "json",
       });
-      if (res.inserted) inserted++;
+      console.error(
+        chalk.gray(
+          `[tick] doctor: ${doctorReport.summary.issues} issue(s), fixed=${doctorReport.summary.fixed}, notified=${doctorReport.summary.notified}`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(chalk.yellow(`[tick] doctor error: ${e.message}`));
     }
+
+    // 1) Collect GitHub signals
+    try {
+      const collected = await collectGithubSignals();
+      let inserted = 0;
+      for (const s of collected) {
+        const id = `sig-${ulid()}`;
+        const res = signals.insert({
+          id,
+          source: s.source,
+          kind: s.kind,
+          external_id: s.external_id,
+          payload: s.payload,
+          status: "new",
+          triaged_at: null,
+        });
+        if (res.inserted) inserted++;
+      }
+      console.error(
+        chalk.gray(
+          `[tick] github: ${inserted} new / ${collected.length} checked`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(
+        chalk.yellow(`[tick] github collection error: ${e.message}`),
+      );
+    }
+
+    // 2) Prepare state snapshot for the claude invocation
+    const snapshot = {
+      now: nowIso(),
+      doctor_report: doctorReport,
+      new_signals: signals.list({ status: "new" }),
+      queued_items: workItems.list({ status: "queued" }),
+      pr_open_items: workItems.list({ status: "pr-open" }),
+      active_sessions: [
+        ...sessionsApi.list({ status: "running" }),
+        ...sessionsApi.list({ status: "starting" }),
+      ],
+      unpushed_notifications: notifications.listUnpushed(),
+    };
+
+    const promptPath = join(PROMPTS_DIR, "cron.md");
+    const promptTemplate = existsSync(promptPath)
+      ? readFileSync(promptPath, "utf8")
+      : DEFAULT_CRON_PROMPT;
+    const fullPrompt = `${promptTemplate}\n\n---\n\n## Current state\n\n\`\`\`json\n${JSON.stringify(snapshot, null, 2)}\n\`\`\`\n`;
+
+    if (opts.dryRun) {
+      console.log(fullPrompt);
+      return;
+    }
+
+    // 3) Invoke claude -p
+    const args = [
+      "--plugin-dir",
+      CLAUDE_PLUGIN_DIR,
+      "--dangerously-skip-permissions",
+      "-p",
+      fullPrompt,
+    ];
     console.error(
       chalk.gray(
-        `[tick] github: ${inserted} new / ${collected.length} checked`,
+        `[tick] invoking claude (${args.length} args, prompt ${fullPrompt.length} chars)`,
       ),
     );
-  } catch (e: any) {
-    console.error(chalk.yellow(`[tick] github collection error: ${e.message}`));
+    const claudeRes = spawnSync(CLAUDE_BIN, args, {
+      stdio: "inherit",
+      env: { ...process.env, COS_TICK_ID: tickId },
+    });
+    rc = claudeRes.status ?? null;
+
+    // 4) Regenerate status.md
+    try {
+      cmdRenderStatus();
+    } catch (e: any) {
+      console.error(chalk.yellow(`[tick] render-status: ${e.message}`));
+    }
+
+    // 5) Log tick
+    const dispatchedCount = sessionsApi
+      .list({ status: "running" })
+      .filter((s) => new Date(s.started_at).toISOString() > startedAt).length;
+    cosLog.insert({
+      id: tickId,
+      signals_triaged: 0,
+      ideas_promoted: 0,
+      items_dispatched: dispatchedCount,
+      notifications_sent: 0,
+      summary: `tick ${tickId} rc=${rc ?? "null"}`,
+    });
+    appendFileSync(
+      DECISIONS_LOG,
+      `\n---\n[${startedAt}] tick ${tickId} rc=${rc ?? "null"}\n`,
+    );
+  } finally {
+    // Clear the start marker whether the tick completed cleanly, threw,
+    // or returned early (dry-run returns before rc is set). Using
+    // try/finally rather than post-claude cleanup is deliberate — a
+    // thrown doctor/collector/snapshot error would otherwise leave the
+    // UI stuck showing "in progress" forever.
+    if (!opts.dryRun) cronTicks.end(tickId, rc);
   }
 
-  // 2) Prepare state snapshot for the claude invocation
-  const snapshot = {
-    now: nowIso(),
-    doctor_report: doctorReport,
-    new_signals: signals.list({ status: "new" }),
-    queued_items: workItems.list({ status: "queued" }),
-    pr_open_items: workItems.list({ status: "pr-open" }),
-    active_sessions: [
-      ...sessionsApi.list({ status: "running" }),
-      ...sessionsApi.list({ status: "starting" }),
-    ],
-    unpushed_notifications: notifications.listUnpushed(),
-  };
-
-  const promptPath = join(PROMPTS_DIR, "cron.md");
-  const promptTemplate = existsSync(promptPath)
-    ? readFileSync(promptPath, "utf8")
-    : DEFAULT_CRON_PROMPT;
-  const fullPrompt = `${promptTemplate}\n\n---\n\n## Current state\n\n\`\`\`json\n${JSON.stringify(snapshot, null, 2)}\n\`\`\`\n`;
-
-  if (opts.dryRun) {
-    console.log(fullPrompt);
-    return;
-  }
-
-  // 3) Invoke claude -p
-  const args = [
-    "--plugin-dir",
-    CLAUDE_PLUGIN_DIR,
-    "--dangerously-skip-permissions",
-    "-p",
-    fullPrompt,
-  ];
-  console.error(
-    chalk.gray(
-      `[tick] invoking claude (${args.length} args, prompt ${fullPrompt.length} chars)`,
-    ),
-  );
-  const claudeRes = spawnSync(CLAUDE_BIN, args, {
-    stdio: "inherit",
-    env: { ...process.env, COS_TICK_ID: tickId },
-  });
-
-  // 4) Regenerate status.md
-  try {
-    cmdRenderStatus();
-  } catch (e: any) {
-    console.error(chalk.yellow(`[tick] render-status: ${e.message}`));
-  }
-
-  // 5) Log tick
-  const dispatchedCount = sessionsApi
-    .list({ status: "running" })
-    .filter((s) => new Date(s.started_at).toISOString() > startedAt).length;
-  cosLog.insert({
-    id: tickId,
-    signals_triaged: 0,
-    ideas_promoted: 0,
-    items_dispatched: dispatchedCount,
-    notifications_sent: 0,
-    summary: `tick ${tickId} rc=${claudeRes.status ?? "null"}`,
-  });
-  appendFileSync(
-    DECISIONS_LOG,
-    `\n---\n[${startedAt}] tick ${tickId} rc=${claudeRes.status ?? "null"}\n`,
-  );
-
-  if (claudeRes.status !== 0) {
-    console.error(chalk.red(`[tick] claude exited ${claudeRes.status}`));
-    process.exit(claudeRes.status ?? 1);
+  if (rc !== null && rc !== 0) {
+    console.error(chalk.red(`[tick] claude exited ${rc}`));
+    process.exit(rc ?? 1);
   }
   console.error(chalk.gray(`[tick ${tickId}] done`));
 };

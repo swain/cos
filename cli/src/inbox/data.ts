@@ -1,5 +1,44 @@
-import { getDb, notifications, signals, sessions } from "../db.js";
+import {
+  getDb,
+  notifications,
+  signals,
+  sessions,
+  cronTicks,
+  cosLog,
+} from "../db.js";
 import type { InboxItem } from "./types.js";
+
+export type CronTickStatus = {
+  id: string;
+  started_at: string;
+  age_minutes: number;
+  stale: boolean;
+  last_completed_at: string | null;
+};
+
+const STALE_TICK_MINUTES = 20;
+
+const minutesSinceSqliteTs = (ts: string): number => {
+  const iso = ts.includes("T") ? ts : ts.replace(" ", "T");
+  const withZ = iso.endsWith("Z") ? iso : `${iso}Z`;
+  const t = new Date(withZ).getTime();
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 60_000));
+};
+
+export const getCronTickStatus = (): CronTickStatus | null => {
+  const active = cronTicks.current();
+  if (!active) return null;
+  const age = minutesSinceSqliteTs(active.started_at);
+  const last = cosLog.recent(1)[0]?.tick_at ?? null;
+  return {
+    id: active.id,
+    started_at: active.started_at,
+    age_minutes: age,
+    stale: age >= STALE_TICK_MINUTES,
+    last_completed_at: last,
+  };
+};
 
 const hasColumn = (table: string, column: string): boolean => {
   const rows = getDb().prepare(`PRAGMA table_info(${table})`).all() as {

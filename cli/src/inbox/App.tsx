@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { spawn } from "node:child_process";
-import { collectInbox, groupByBand } from "./data.js";
+import {
+  collectInbox,
+  groupByBand,
+  getCronTickStatus,
+  type CronTickStatus,
+} from "./data.js";
 import {
   ackNotification,
   approveWorkItem,
@@ -160,9 +165,24 @@ const HelpOverlay: React.FC = () => (
   </Box>
 );
 
+const TickBanner: React.FC<{ tick: CronTickStatus }> = ({ tick }) => {
+  const color = tick.stale ? "yellow" : "cyan";
+  const body = tick.stale
+    ? `Cron tick in progress ${tick.age_minutes}m (looks stale — last completed ${tick.last_completed_at ?? "never"}) · ${tick.id}`
+    : `Cron tick in progress (started ${tick.age_minutes}m ago · ${tick.id})`;
+  return (
+    <Box marginTop={1}>
+      <Text color={color}>⟳ {body}</Text>
+    </Box>
+  );
+};
+
 export const App: React.FC = () => {
   const { exit } = useApp();
   const [items, setItems] = useState<InboxItem[]>(() => collectInbox());
+  const [tickStatus, setTickStatus] = useState<CronTickStatus | null>(() =>
+    getCronTickStatus(),
+  );
   const [refreshedAt, setRefreshedAt] = useState<Date>(new Date());
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -170,6 +190,7 @@ export const App: React.FC = () => {
 
   const refresh = useCallback(() => {
     setItems(collectInbox());
+    setTickStatus(getCronTickStatus());
     setRefreshedAt(new Date());
   }, []);
 
@@ -293,6 +314,7 @@ export const App: React.FC = () => {
         <Text bold>Inbox</Text>
         <Text color="gray">refreshed {fmtClock(refreshedAt)}</Text>
       </Box>
+      {tickStatus ? <TickBanner tick={tickStatus} /> : null}
       {flatVisible.length === 0 ? (
         <Box marginTop={1} flexDirection="column">
           <Text color="gray">Inbox empty. Po has nothing for you.</Text>

@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS cos_log (
   summary             TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS cron_ticks (
+  id         TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ended_at   TEXT,
+  rc         INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cron_ticks_ended ON cron_ticks(ended_at);
+CREATE INDEX IF NOT EXISTS idx_cron_ticks_started ON cron_ticks(started_at);
+
 CREATE TABLE IF NOT EXISTS kv (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,

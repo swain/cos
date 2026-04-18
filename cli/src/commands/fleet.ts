@@ -7,9 +7,16 @@ import {
   ideas,
   signals,
   cosLog,
+  cronTicks,
 } from "../db.js";
 import { STATUS_MD, nowIso } from "../util.js";
 import type { WorkItem } from "../types.js";
+
+// Threshold above which an in-progress cron tick is treated as potentially
+// wedged. Typical ticks complete in ~1–5m; doctor-invoked claude -p can push
+// it past 15m. Anything older than this likely means launchd lost the child
+// or claude hung — surface a "looks stale" hint so the user notices.
+export const STALE_TICK_MINUTES = 20;
 
 export type LastFailure = {
   reason: string;
@@ -28,6 +35,11 @@ export type EnrichedWorkItem = WorkItem & {
   active_step?: ActiveStep;
 };
 
+export type CurrentTick = {
+  id: string;
+  started_at: string;
+};
+
 export type FleetSummary = {
   queued: EnrichedWorkItem[];
   in_progress: EnrichedWorkItem[];
@@ -39,6 +51,7 @@ export type FleetSummary = {
   new_ideas_count: number;
   recent_notifications: ReturnType<typeof notifications.listUnpushed>;
   last_tick_at: string | null;
+  current_tick: CurrentTick | null;
 };
 
 const enrichBlocked = (wi: WorkItem): EnrichedWorkItem => {
@@ -83,6 +96,7 @@ export const collectFleet = (): FleetSummary => {
   const new_signals = signals.list({ status: "new" });
   const new_ideas = ideas.list({ status: "new" });
   const recentLogs = cosLog.recent(1);
+  const active = cronTicks.current();
   return {
     queued,
     in_progress,
@@ -94,7 +108,20 @@ export const collectFleet = (): FleetSummary => {
     new_ideas_count: new_ideas.length,
     recent_notifications: notifications.listUnpushed(),
     last_tick_at: recentLogs[0]?.tick_at ?? null,
+    current_tick: active
+      ? { id: active.id, started_at: active.started_at }
+      : null,
   };
+};
+
+const minutesSinceSqliteTs = (ts: string): number => {
+  // SQLite's datetime('now') returns a UTC string without the Z suffix.
+  // new Date() on that treats it as local; append Z so it's parsed as UTC.
+  const iso = ts.includes("T") ? ts : ts.replace(" ", "T");
+  const withZ = iso.endsWith("Z") ? iso : `${iso}Z`;
+  const t = new Date(withZ).getTime();
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 60_000));
 };
 
 export const renderFleetMarkdown = (f: FleetSummary): string => {
@@ -112,7 +139,18 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   lines.push(`- New signals: **${f.new_signals_count}**`);
   lines.push(`- New ideas: **${f.new_ideas_count}**`);
   lines.push(`- Unpushed notifications: **${f.recent_notifications.length}**`);
-  lines.push(`- Last cron tick: ${f.last_tick_at ?? "_never_"}`);
+  if (f.current_tick) {
+    const ageMin = minutesSinceSqliteTs(f.current_tick.started_at);
+    const staleHint =
+      ageMin >= STALE_TICK_MINUTES
+        ? ` (looks stale — last completed ${f.last_tick_at ?? "_never_"})`
+        : "";
+    lines.push(
+      `- Cron tick in progress: started ${ageMin}m ago, \`${f.current_tick.id}\`${staleHint}`,
+    );
+  } else {
+    lines.push(`- Last cron tick: ${f.last_tick_at ?? "_never_"}`);
+  }
   lines.push("");
 
   const fmtWI = (wi: EnrichedWorkItem) =>
