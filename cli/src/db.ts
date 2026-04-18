@@ -482,6 +482,42 @@ export const recurring = {
   },
 };
 
+export type CronTick = {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  rc: number | null;
+};
+
+export const cronTicks = {
+  start(id: string): void {
+    getDb().prepare(`INSERT INTO cron_ticks (id) VALUES (?)`).run(id);
+  },
+  end(id: string, rc: number | null): void {
+    getDb()
+      .prepare(
+        `UPDATE cron_ticks SET ended_at = datetime('now'), rc = @rc WHERE id = @id`,
+      )
+      .run({ id, rc });
+  },
+  current(): CronTick | null {
+    const r = getDb()
+      .prepare(
+        `SELECT * FROM cron_ticks WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get() as any;
+    return r ?? null;
+  },
+  lastCompleted(): CronTick | null {
+    const r = getDb()
+      .prepare(
+        `SELECT * FROM cron_ticks WHERE ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1`,
+      )
+      .get() as any;
+    return r ?? null;
+  },
+};
+
 export const kv = {
   get(key: string): string | null {
     const r = getDb()

@@ -1,7 +1,12 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import chalk from "chalk";
 import { getDb } from "../db.js";
-import { collectInbox, groupByBand } from "../inbox/data.js";
+import {
+  collectInbox,
+  groupByBand,
+  getCronTickStatus,
+  type CronTickStatus,
+} from "../inbox/data.js";
 import {
   ackNotification,
   approveWorkItem,
@@ -133,6 +138,18 @@ h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
 .zero-state { color: var(--muted); padding: 24px 0; text-align: center; }
 .zero-state .sig { display: block; margin-top: 12px; font-size: 12px; }
 .bulk { margin-top: 8px; }
+.tick-banner {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.tick-banner.stale { border-left-color: var(--red); color: var(--red); }
+.tick-banner .id { color: var(--muted); margin-left: 8px; }
 `;
 
 const isHttpUrl = (s: string): boolean =>
@@ -199,7 +216,19 @@ const renderSection = (
   return `<section class="section ${id}"><h2>${title} (${items.length})</h2>${body}${bulkAction}</section>`;
 };
 
-const renderPage = (items: InboxItem[]): string => {
+const renderTickBanner = (tick: CronTickStatus | null): string => {
+  if (!tick) return "";
+  const stale = tick.stale ? " stale" : "";
+  const staleSuffix = tick.stale
+    ? ` · looks stale — last completed ${escapeHtml(tick.last_completed_at ?? "never")}`
+    : "";
+  return `<div class="tick-banner${stale}">⟳ Cron tick in progress (started ${tick.age_minutes}m ago)${staleSuffix}<span class="id">${escapeHtml(tick.id)}</span></div>`;
+};
+
+const renderPage = (
+  items: InboxItem[],
+  tick: CronTickStatus | null,
+): string => {
   const bands = groupByBand(items);
   const total = items.length;
   const now = new Date().toLocaleTimeString();
@@ -219,6 +248,7 @@ const renderPage = (items: InboxItem[]): string => {
 <body>
 <h1>Inbox${total ? ` · ${total}` : ""}</h1>
 <div class="subtle">Refreshed ${now} · polls every 3s</div>
+${renderTickBanner(tick)}
 ${zeroState}
 ${renderSection("needs-decision", "Needs decision", bands.decision, "Nothing blocking.")}
 ${renderSection("fyi", "FYI", bands.fyi, "No FYI items.", bands.fyi.length > 0)}
@@ -264,7 +294,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
 
   try {
     if (method === "GET" && path === "/") {
-      sendHtml(res, renderPage(collectInbox()));
+      sendHtml(res, renderPage(collectInbox(), getCronTickStatus()));
       return;
     }
     if (method === "GET" && path === "/healthz") {
