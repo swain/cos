@@ -27,6 +27,7 @@ import {
   cmdNotifyMarkPushed,
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
+import { cmdInbox } from "./commands/inbox.js";
 import {
   cmdRecurringList,
   cmdRecurringAdd,
@@ -242,6 +243,13 @@ program
   .action(async (opts) => {
     await cmdTick({ dryRun: opts.dryRun });
   });
+
+program
+  .command("inbox")
+  .description(
+    "Open the local inbox TUI (live view of fleet.db attention items)",
+  )
+  .action(() => cmdInbox());
 
 const recurringCmd = program
   .command("recurring")
