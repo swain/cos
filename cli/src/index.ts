@@ -53,6 +53,7 @@ import {
   cmdFollowupMarkRaised,
   cmdFollowupMarkAddressed,
 } from "./commands/followups.js";
+import { cmdPlan } from "./commands/plan.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -71,6 +72,12 @@ program
   .option("--repos <json>", "JSON array of repo names", "[]")
   .option("--priority <n>", "priority 1-5", "3")
   .option("--source <s>", "source", "user")
+  .option(
+    "--needs-planning",
+    "flag as needing decomposition via `cos plan`",
+    false,
+  )
+  .option("--parent-id <id>", "link as a child of another work item")
   .action((opts) => {
     cmdEnqueue({
       title: opts.title,
@@ -79,6 +86,8 @@ program
       repos: JSON.parse(opts.repos),
       priority: parseInt(opts.priority, 10),
       source: opts.source,
+      needsPlanning: !!opts.needsPlanning,
+      parentId: opts.parentId ?? null,
     });
   });
 
@@ -149,6 +158,25 @@ program
   .description("Spawn a worker on a work item")
   .option("--force", "skip auto-dispatch guards", false)
   .action((id, opts) => cmdDispatch(id, { force: opts.force }));
+
+program
+  .command("plan <workItemId>")
+  .description(
+    "Decompose a needs_planning work item into child chunks via a planning subagent",
+  )
+  .option("--dry-run", "print the planner prompt and exit", false)
+  .option("--replan", "re-plan even if children already exist", false)
+  .option(
+    "--from-file <path>",
+    "skip claude and read the planner JSON from this file (for testing)",
+  )
+  .action((id, opts) =>
+    cmdPlan(id, {
+      dryRun: !!opts.dryRun,
+      replan: !!opts.replan,
+      fromFile: opts.fromFile,
+    }),
+  );
 
 program
   .command("wi-set-deps <workItemId>")
