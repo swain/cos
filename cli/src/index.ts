@@ -27,6 +27,7 @@ import {
   cmdNotifyMarkPushed,
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
+import { cmdDoctor } from "./commands/doctor.js";
 import { cmdInbox } from "./commands/inbox.js";
 import { cmdInboxServe } from "./commands/inbox-serve.js";
 import {
@@ -243,6 +244,25 @@ program
   .option("--dry-run", "print prompt, do not invoke claude", false)
   .action(async (opts) => {
     await cmdTick({ dryRun: opts.dryRun });
+  });
+
+program
+  .command("doctor")
+  .description("Run system health invariants; optionally auto-fix")
+  .option(
+    "--auto-fix",
+    "apply fixes for invariants 1-5; always notify on 6-7",
+    false,
+  )
+  .option("--dry-run", "report only; never mutate state", false)
+  .option("--format <text|json>", "output format", "text")
+  .action((opts) => {
+    const format = opts.format === "json" ? "json" : "text";
+    cmdDoctor({
+      autoFix: !!opts.autoFix,
+      dryRun: !!opts.dryRun,
+      format,
+    });
   });
 
 program
