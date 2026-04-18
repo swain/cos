@@ -123,6 +123,13 @@ See `USING_COS.md` for the full guide (daily rhythm, notification types, anti-pa
 6. **Context is durable.** Decisions, team notes, architectural commitments live in markdown files. COS loads them into every dialog.
 7. **Failure is visible.** Workers write worklogs. Stale sessions are detected. Nothing silently dies.
 
+## Operational invariants
+
+- **`~/Repos/cos` (the main checkout) is deploy-only.** `~/.claude/cos/cli/` is a symlink into `~/Repos/cos/cli/`, so the `cos` CLI any Claude Code session runs is served from whatever state that working tree happens to be in. Treat it as a deployment target, not a scratchpad:
+  - All human edits happen in dedicated worktrees under `~/Repos/<repo>-worktrees/<branch>/` — never in `~/Repos/cos` itself.
+  - The checkout must stay on `main` and in sync with `origin/main`. If you find it on another branch, or with local changes, that's a bug — sync it (`git fetch origin main && git reset --hard origin/main`) before doing anything else.
+  - After a `cos` PR merges, the checkout is pulled and the CLI rebuilt automatically by the worker's self-merge policy (see `prompts/worker.md`, step 8). Long-running launchd services whose code was touched are kickstart-reloaded in the same step.
+
 ## Repo layout
 
 | Path                                  | Purpose                                                                                                                                        |
