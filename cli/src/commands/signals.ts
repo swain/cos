@@ -4,6 +4,7 @@ import { signals, ideas, workItems, notifications } from "../db.js";
 import { collectGithubSignals } from "../collectors/github.js";
 import { runCalendarCollector } from "../collectors/calendar.js";
 import { collectClickupSignals } from "../collectors/clickup.js";
+import { collectSlackSignals } from "../collectors/slack.js";
 import type { Signal } from "../types.js";
 
 export const cmdSignalsList = (filter?: {
@@ -199,5 +200,26 @@ export const cmdCollectClickup = async () => {
     chalk.gray(
       `clickup signals: ${inserted} new (${collected.length} checked)`,
     ),
+  );
+};
+
+export const cmdCollectSlack = async () => {
+  const collected = await collectSlackSignals();
+  let inserted = 0;
+  for (const s of collected) {
+    const id = `sig-${ulid()}`;
+    const res = signals.insert({
+      id,
+      source: s.source,
+      kind: s.kind,
+      external_id: s.external_id,
+      payload: s.payload,
+      status: "new",
+      triaged_at: null,
+    } satisfies Omit<Signal, "created_at">);
+    if (res.inserted) inserted++;
+  }
+  console.log(
+    chalk.gray(`slack signals: ${inserted} new (${collected.length} checked)`),
   );
 };

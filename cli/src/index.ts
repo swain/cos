@@ -19,6 +19,7 @@ import {
   cmdCollectGithub,
   cmdCollectCalendar,
   cmdCollectClickup,
+  cmdCollectSlack,
 } from "./commands/signals.js";
 import {
   cmdIdeasList,
@@ -224,6 +225,11 @@ program
   .command("collect-clickup")
   .description("Run the ClickUp signal collector")
   .action(() => cmdCollectClickup());
+
+program
+  .command("collect-slack")
+  .description("Run the Slack signal collector (DMs + @-mentions via MCP)")
+  .action(() => cmdCollectSlack());
 
 program
   .command("ideas")
