@@ -15,13 +15,16 @@ import {
   cosLog,
   notifications,
 } from "../db.js";
-import { CONFIG_JSON, LOGS_DIR, nowIso, parseJson } from "../util.js";
+import { CONFIG_JSON, HOME, LOGS_DIR, nowIso, parseJson } from "../util.js";
 import type { Session } from "../types.js";
 
 const TMUX_SESSION = "cos-workers";
 const DEFAULT_STALE_MINUTES = 20;
 const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
+
+const COS_REPO_PATH = join(HOME, "Repos/cos");
+const COS_SHAREABLE_DIRS = ["prompts", "cli/src", "bin", "launchd"];
 
 type Severity = "info" | "warn" | "error";
 
@@ -459,6 +462,149 @@ const checkInvariant7TickHealth = (opts: DoctorOptions): DoctorFinding => {
   return f;
 };
 
+const runGit = (args: string[], cwd: string): string | null => {
+  try {
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    return null;
+  }
+};
+
+// Invariant 8: ~/Repos/cos must stay on main, in sync with origin/main, with
+// no uncommitted changes in shareable paths. Drift here causes symlinked
+// prompts/bin/cli to serve stale content. See arch.md "Upstream invariant".
+const checkInvariant8GitSyncDrift = (opts: DoctorOptions): DoctorFinding => {
+  const f = emptyFinding("git-sync-drift");
+  if (!existsSync(COS_REPO_PATH)) return f;
+  const branch = runGit(["branch", "--show-current"], COS_REPO_PATH);
+  if (branch === null) return f;
+  const headSha = runGit(["rev-parse", "HEAD"], COS_REPO_PATH);
+  const remoteLs = runGit(["ls-remote", "origin", "main"], COS_REPO_PATH);
+  const remoteSha = remoteLs ? remoteLs.split(/\s+/)[0] : null;
+
+  const statusOut = runGit(["status", "--porcelain"], COS_REPO_PATH) ?? "";
+  const dirtyLines = statusOut
+    .split("\n")
+    .filter(Boolean)
+    .filter((line) => {
+      const path = line.slice(3);
+      return COS_SHAREABLE_DIRS.some(
+        (d) => path === d || path.startsWith(d + "/"),
+      );
+    });
+
+  const onMain = branch === "main";
+  // If we couldn't reach origin (no network), don't flag sync drift; still
+  // validate branch + uncommitted state, since those are local-only checks.
+  const syncKnown = remoteSha !== null;
+  const syncWithRemote = !syncKnown || headSha === remoteSha;
+  const hasUncommitted = dirtyLines.length > 0;
+
+  if (onMain && syncWithRemote && !hasUncommitted) return f;
+
+  f.ok = false;
+
+  if (hasUncommitted) {
+    f.severity = "error";
+    f.entries.push({
+      reason: "uncommitted changes in shareable paths — will not auto-fix",
+      details: {
+        repo: COS_REPO_PATH,
+        branch,
+        head: headSha,
+        remote_main: remoteSha,
+        dirty_paths: dirtyLines,
+      },
+    });
+    if (!opts.dryRun) {
+      const body = [
+        `~/Repos/cos has ${dirtyLines.length} uncommitted change(s) in shareable paths.`,
+        "",
+        `Branch: ${branch}  HEAD: ${headSha ?? "?"}  origin/main: ${remoteSha ?? "?"}`,
+        "",
+        "Dirty paths:",
+        ...dirtyLines.slice(0, 20).map((l) => `  ${l}`),
+        "",
+        "Doctor will not auto-reset because this may be in-progress work.",
+        "Commit or stash the changes, then run `cos doctor --auto-fix` to",
+        "re-sync ~/Repos/cos with origin/main and rebuild the dist.",
+      ].join("\n");
+      const notifId = pushNotification(
+        "~/Repos/cos has uncommitted source changes — manual sync required",
+        body,
+        [],
+      );
+      f.notified.push(notifId);
+    }
+    return f;
+  }
+
+  if (!onMain) {
+    f.entries.push({
+      reason: `~/Repos/cos is on branch '${branch}', expected 'main'`,
+      details: {
+        repo: COS_REPO_PATH,
+        branch,
+        head: headSha,
+        remote_main: remoteSha,
+      },
+    });
+  }
+  if (onMain && !syncWithRemote) {
+    f.entries.push({
+      reason: `~/Repos/cos HEAD ${headSha ?? "?"} diverges from origin/main ${remoteSha ?? "?"}`,
+      details: {
+        repo: COS_REPO_PATH,
+        branch,
+        head: headSha,
+        remote_main: remoteSha,
+      },
+    });
+  }
+
+  if (opts.autoFix && !opts.dryRun) {
+    try {
+      if (!onMain) {
+        execFileSync("git", ["switch", "main"], {
+          cwd: COS_REPO_PATH,
+          stdio: "pipe",
+        });
+      }
+      execFileSync("git", ["fetch", "origin", "main"], {
+        cwd: COS_REPO_PATH,
+        stdio: "pipe",
+      });
+      execFileSync("git", ["reset", "--hard", "origin/main"], {
+        cwd: COS_REPO_PATH,
+        stdio: "pipe",
+      });
+      execFileSync("npm", ["run", "build"], {
+        cwd: join(COS_REPO_PATH, "cli"),
+        stdio: "pipe",
+      });
+      f.fixed.push({
+        action: "switched to main, reset to origin/main, rebuilt cli dist",
+        details: {
+          from_branch: branch,
+          from_head: headSha,
+          to_head: remoteSha,
+        },
+      });
+    } catch (e: any) {
+      f.entries.push({
+        reason: `auto-fix failed: ${e?.message ?? String(e)}`,
+        details: { repo: COS_REPO_PATH },
+      });
+    }
+  }
+
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -468,6 +614,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant5QueuedButRunning(opts),
     checkInvariant6CircuitBreaker(opts),
     checkInvariant7TickHealth(opts),
+    checkInvariant8GitSyncDrift(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);

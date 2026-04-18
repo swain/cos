@@ -271,7 +271,7 @@ program
   .description("Run system health invariants; optionally auto-fix")
   .option(
     "--auto-fix",
-    "apply fixes for invariants 1-5; always notify on 6-7",
+    "apply fixes for invariants 1-5, 8; always notify on 6-7",
     false,
   )
   .option("--dry-run", "report only; never mutate state", false)
