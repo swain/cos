@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 import chalk from "chalk";
 import { signals, ideas, workItems, notifications } from "../db.js";
 import { collectGithubSignals } from "../collectors/github.js";
+import { runCalendarCollector } from "../collectors/calendar.js";
 import type { Signal } from "../types.js";
 
 export const cmdSignalsList = (filter?: {
@@ -111,6 +112,49 @@ export const cmdSignalTriage = (
   }
   console.error(chalk.red(`unknown action: ${action}`));
   process.exit(2);
+};
+
+export const cmdSignalAdd = (opts: {
+  source: string;
+  kind: string;
+  externalId?: string;
+  payload?: Record<string, unknown>;
+}) => {
+  const id = `sig-${ulid()}`;
+  const res = signals.insert({
+    id,
+    source: opts.source,
+    kind: opts.kind,
+    external_id: opts.externalId ?? null,
+    payload: opts.payload ?? {},
+    status: "new",
+    triaged_at: null,
+  });
+  if (res.inserted) {
+    console.log(chalk.green("signal"), id);
+  } else {
+    console.log(
+      chalk.gray("signal duplicate"),
+      `(source=${opts.source} kind=${opts.kind} external_id=${opts.externalId})`,
+    );
+  }
+  return res;
+};
+
+export const cmdCollectCalendar = (opts: { timeoutMs?: number } = {}) => {
+  const res = runCalendarCollector({ timeoutMs: opts.timeoutMs });
+  if (!res.ran) {
+    console.log(chalk.gray("calendar: skipped"), res.reason ?? "");
+    return;
+  }
+  if (res.exitCode === 0) {
+    console.log(chalk.gray("calendar: ok"));
+  } else {
+    console.log(
+      chalk.yellow(`calendar: exit ${res.exitCode ?? "null"}`),
+      res.reason ?? "",
+    );
+  }
 };
 
 export const cmdCollectGithub = async () => {
