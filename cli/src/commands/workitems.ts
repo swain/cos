@@ -96,8 +96,26 @@ export const cmdWorkerDone = (
       notes: opts.failed,
       ended_at: new Date().toISOString(),
     });
-    if (s.work_item_id)
-      workItems.update(s.work_item_id, { status: "blocked", session_id: null });
+    if (s.work_item_id) {
+      // Mechanical exits (safety-net trap in spawn-worker fires when the shell
+      // dies without the worker calling --pr-url) are not genuine blockers — the
+      // WI should go straight back to queued for redispatch. Worker-reported
+      // failures ("stuck >10min" etc.) stay blocked until a human looks.
+      //
+      // pr-open WIs keep their status regardless — the PR is still live on
+      // GitHub, so the next pr-comments signal (or the invariant-4 tick
+      // reconciliation) is the right re-entry point, not a blanket requeue.
+      const wi = workItems.get(s.work_item_id);
+      const isMechanicalExit = opts.failed.startsWith("worker shell exited");
+      if (wi?.status === "pr-open") {
+        workItems.update(s.work_item_id, { session_id: null });
+      } else {
+        workItems.update(s.work_item_id, {
+          status: isMechanicalExit ? "queued" : "blocked",
+          session_id: null,
+        });
+      }
+    }
     console.log(chalk.red("worker failed"), sessionId, "—", opts.failed);
     return;
   }
@@ -197,6 +215,8 @@ const workerPromptTemplate = () => {
 
 const FALLBACK_WORKER_PROMPT = `You are a COS worker running on work item {{WI_ID}} (session {{SESSION_ID}}).
 
+{{MODE_ADDENDUM}}
+
 Goal:
 {{TITLE}}
 
@@ -253,8 +273,31 @@ export const cmdWorkerPrompt = (workItemRef: string, sessionId: string) => {
     .replaceAll("{{ACCEPTANCE}}", wi.acceptance_criteria)
     .replaceAll("{{WORKTREES}}", worktrees)
     .replaceAll("{{WORKLOG_PATH}}", worklogPath)
+    .replaceAll("{{MODE_ADDENDUM}}", buildModeAddendum(wi, sessionId))
     .replaceAll("{{WI_JSON}}", JSON.stringify(wi, null, 2));
   process.stdout.write(filled);
+};
+
+// Redispatches onto a WI that already has a PR open (status=pr-open, or
+// status got clobbered by a mechanical-exit requeue but pr_urls survive) are
+// "fix-comments" re-entries: the worker should push to the existing branch
+// rather than open a second PR. The addendum is the only signal the worker
+// gets — inject it front-and-center so rule 5 (open PR) does not override.
+export const buildModeAddendum = (wi: WorkItem, sessionId: string): string => {
+  if (!wi.pr_urls.length) return "";
+  const prUrl = wi.pr_urls[wi.pr_urls.length - 1];
+  return [
+    "> **Fix-comments mode — you are resuming this work item.**",
+    ">",
+    `> A PR is already open at ${prUrl}. Your job this dispatch is to address the reviewer feedback on it and push the fix; do NOT open a second PR.`,
+    ">",
+    `> 1. Read the comments: \`gh pr view ${prUrl} --comments\` and, for inline review comments, \`gh api repos/{owner}/{repo}/pulls/{pr_number}/comments\`.`,
+    "> 2. Make the smallest set of changes that addresses each comment. Reply on the PR explaining any comment you deliberately do not act on.",
+    "> 3. Commit incrementally, then `git push --force-with-lease` to the existing branch.",
+    `> 4. When the fix is pushed, run \`~/.claude/cos/bin/cos worker-done ${sessionId} --pr-url ${prUrl}\` and exit. The PR URL is the same on purpose — it keeps the session accounting consistent.`,
+    ">",
+    '> Ignore the "open the PR with `gh pr create`" instruction in rule 5 below — it does not apply to this dispatch.',
+  ].join("\n");
 };
 
 export const cmdDispatch = (
