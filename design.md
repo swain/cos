@@ -300,7 +300,7 @@ Otherwise COS asks: "This looks underspecified — want me to groom it more, or 
 
 ## Self-healing invariants (`cos doctor`)
 
-`cos doctor` runs as step 0 of every cron tick and can also be invoked by hand. It enforces a short list of cross-cutting invariants that, if violated, mean the system's view of itself has drifted from reality. Invariants 1–5 and 8 are auto-fixable when `--auto-fix` is set; 6–7 are escalations that always notify.
+`cos doctor` runs as step 0 of every cron tick and can also be invoked by hand. It enforces a short list of cross-cutting invariants that, if violated, mean the system's view of itself has drifted from reality. Invariants 1–5, 8, and 9 are auto-fixable when `--auto-fix` is set; 6–7 are escalations that always notify.
 
 | #   | Invariant                                                                                                                                                     | Auto-fix action (with `--auto-fix`)                                                                                                                                                                                                                |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -312,10 +312,11 @@ Otherwise COS asks: "This looks underspecified — want me to groom it more, or 
 | 6   | **Circuit breaker** — last 3 worker sessions all ended `failed` within 15 min of start (no PRs opened)                                                        | Set `dispatch_paused=true` in `config.json`; push **urgent** notification                                                                                                                                                                          |
 | 7   | Last 3 cron ticks all exited non-zero                                                                                                                         | Push **urgent** notification                                                                                                                                                                                                                       |
 | 8   | **git-sync-drift** — `~/Repos/cos` is off `main`, out of sync with `origin/main`, or has uncommitted changes in `prompts/`, `cli/src/`, `bin/`, or `launchd/` | If no uncommitted changes: `git switch main && git fetch origin main && git reset --hard origin/main`, then rebuild the CLI dist. If uncommitted changes are present: push **urgent** notification and leave the tree alone (user may be editing). |
+| 9   | **stranded-work-item** — work items in `in-progress` whose linked session is `stale`/`failed`/`killed`/`completed`, points to a missing session, or is null   | Reset the work item: `status='queued'`, `session_id=null`. `worktree_paths` preserved so a re-dispatch reuses the existing branch.                                                                                                                 |
 
 Flags:
 
-- `--auto-fix` — apply fixes for 1–5 and 8; always notify on 6–7 (and 8 when uncommitted changes block auto-fix).
+- `--auto-fix` — apply fixes for 1–5, 8, and 9; always notify on 6–7 (and 8 when uncommitted changes block auto-fix).
 - `--dry-run` — report only; never mutate state or send notifications.
 - `--format text|json` — default `text`; `json` is machine-readable and used by `cos tick`.
 

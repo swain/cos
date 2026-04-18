@@ -605,6 +605,49 @@ const checkInvariant8GitSyncDrift = (opts: DoctorOptions): DoctorFinding => {
   return f;
 };
 
+// Invariant 9: work items stuck at in-progress whose linked session is no
+// longer active. Fleet-wide worker crashes strand WIs here because stale-
+// heartbeat only touches the session row; the WI keeps session_id pointing at
+// the dead session and dispatch refuses to re-pick it. 2026-04-18: 17 WIs sat
+// stranded for ~10h after a fleet-wide crash. Runs after invariants 1–3 so
+// sessions just marked stale/failed get picked up in the same tick.
+const ACTIVE_SESSION_STATUSES = new Set(["starting", "running", "idle"]);
+export const checkInvariant9StrandedWorkItem = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("stranded-work-item");
+  const inProgress = workItems.list({ status: "in-progress" });
+  if (!inProgress.length) return f;
+  for (const wi of inProgress) {
+    const session = wi.session_id ? sessionsApi.get(wi.session_id) : null;
+    const sessionStatus = session?.status ?? null;
+    if (session && ACTIVE_SESSION_STATUSES.has(sessionStatus!)) continue;
+    const reason = session
+      ? `linked session ${session.id} is ${sessionStatus}, not active`
+      : wi.session_id
+        ? `linked session ${wi.session_id} not found`
+        : "in-progress with no session_id";
+    f.ok = false;
+    f.entries.push({
+      id: wi.id,
+      reason,
+      details: {
+        session_id: wi.session_id,
+        session_status: sessionStatus,
+        session_ended_at: session?.ended_at ?? null,
+      },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      workItems.update(wi.id, { status: "queued", session_id: null });
+      f.fixed.push({
+        id: wi.id,
+        action: "status → queued, session_id cleared",
+      });
+    }
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -615,6 +658,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant6CircuitBreaker(opts),
     checkInvariant7TickHealth(opts),
     checkInvariant8GitSyncDrift(opts),
+    checkInvariant9StrandedWorkItem(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);
