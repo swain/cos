@@ -10,6 +10,7 @@ import {
   cmdWorkerPrompt,
   cmdDispatch,
   cmdWorkerPrimaryWorktree,
+  cmdWorkItemSetDeps,
 } from "./commands/workitems.js";
 import {
   cmdSignalsList,
@@ -136,6 +137,15 @@ program
   .description("Spawn a worker on a work item")
   .option("--force", "skip auto-dispatch guards", false)
   .action((id, opts) => cmdDispatch(id, { force: opts.force }));
+
+program
+  .command("wi-set-deps <workItemId>")
+  .description("Add/remove depends_on entries on a work item")
+  .option("--add <depId...>", "dep work-item id(s) to add")
+  .option("--remove <depId...>", "dep work-item id(s) to remove")
+  .action((id, opts) =>
+    cmdWorkItemSetDeps(id, { add: opts.add, remove: opts.remove }),
+  );
 
 program
   .command("signals")
