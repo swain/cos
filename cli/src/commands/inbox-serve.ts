@@ -213,38 +213,50 @@ const renderRelated = (ids: string[]): string =>
     )
     .join(" · ");
 
-const btn = (action: string, label: string, cls = ""): string =>
-  `<form method="post" action="${action}"><button class="${cls}">${label}</button></form>`;
+const hiddenReturn = (to: string): string =>
+  `<input type="hidden" name="returnTo" value="${escapeHtml(to)}">`;
 
-const renderActions = (item: InboxItem): string => {
+const btn = (
+  action: string,
+  label: string,
+  returnTo: string,
+  cls = "",
+): string =>
+  `<form method="post" action="${action}">${hiddenReturn(returnTo)}<button class="${cls}">${label}</button></form>`;
+
+const renderActions = (item: InboxItem, returnTo: string): string => {
   const id = encodeURIComponent(item.id);
   const key = encodeURIComponent(item.key);
   switch (item.kind) {
     case "notification":
-      return btn(`/notifications/${id}/ack`, "ack");
+      return btn(`/notifications/${id}/ack`, "ack", returnTo);
     case "work-item":
       return (
-        btn(`/work-items/${id}/approve`, "approve &amp; dispatch", "primary") +
-        btn(`/work-items/${id}/snooze`, "snooze")
+        btn(
+          `/work-items/${id}/approve`,
+          "approve &amp; dispatch",
+          returnTo,
+          "primary",
+        ) + btn(`/work-items/${id}/snooze`, "snooze", returnTo)
       );
     case "signal":
-      return btn(`/signals/${id}/suppress`, "suppress", "danger");
+      return btn(`/signals/${id}/suppress`, "suppress", returnTo, "danger");
     case "session":
       return (
-        btn(`/sessions/${id}/retry`, "retry", "primary") +
-        btn(`/sessions/${id}/kill`, "kill", "danger") +
-        btn(`/sessions/${id}/dismiss`, "dismiss")
+        btn(`/sessions/${id}/retry`, "retry", returnTo, "primary") +
+        btn(`/sessions/${id}/kill`, "kill", returnTo, "danger") +
+        btn(`/sessions/${id}/dismiss`, "dismiss", returnTo)
       );
     case "worker":
       return (
-        btn(`/sessions/${id}/peek`, "peek") +
-        btn(`/sessions/${id}/kill`, "kill", "danger")
+        btn(`/sessions/${id}/peek`, "peek", returnTo) +
+        btn(`/sessions/${id}/kill`, "kill", returnTo, "danger")
       );
     case "queue-item":
       return (
-        btn(`/work-items/${id}/dispatch`, "dispatch now", "primary") +
-        btn(`/work-items/${id}/bump`, "bump") +
-        btn(`/work-items/${id}/archive`, "archive", "danger")
+        btn(`/work-items/${id}/dispatch`, "dispatch now", returnTo, "primary") +
+        btn(`/work-items/${id}/bump`, "bump", returnTo) +
+        btn(`/work-items/${id}/archive`, "archive", returnTo, "danger")
       );
     case "pr-review": {
       const pr = item.related_ids.find(isHttpUrl);
@@ -253,8 +265,9 @@ const renderActions = (item: InboxItem): string => {
         : "";
       return (
         openBtn +
-        btn(`/work-items/${id}/pr-reviewed`, "mark reviewed") +
+        btn(`/work-items/${id}/pr-reviewed`, "mark reviewed", returnTo) +
         `<form method="post" action="/inbox/rows/${key}/respond" style="display:inline">
+          ${hiddenReturn(returnTo)}
           <input type="hidden" name="text" value="dispatch fix worker for this PR">
           <button>dispatch fix worker</button>
          </form>`
@@ -262,16 +275,16 @@ const renderActions = (item: InboxItem): string => {
     }
     case "blocked-item":
       return (
-        btn(`/work-items/${id}/retry`, "retry", "primary") +
-        btn(`/work-items/${id}/failure-log`, "view log") +
-        btn(`/work-items/${id}/abandon`, "abandon", "danger")
+        btn(`/work-items/${id}/retry`, "retry", returnTo, "primary") +
+        btn(`/work-items/${id}/failure-log`, "view log", returnTo) +
+        btn(`/work-items/${id}/abandon`, "abandon", returnTo, "danger")
       );
     case "recent-win":
-      return btn(`/work-items/${id}/pr-reviewed`, "dismiss");
+      return btn(`/work-items/${id}/pr-reviewed`, "dismiss", returnTo);
   }
 };
 
-const renderItem = (item: InboxItem): string => {
+const renderItem = (item: InboxItem, returnTo: string): string => {
   const urgentClass = item.urgency === "urgent" ? " urgent" : "";
   const related = renderRelated(item.related_ids);
   const metaExtras = item.meta
@@ -283,7 +296,7 @@ const renderItem = (item: InboxItem): string => {
         .join("")
     : "";
   return `
-<div class="item${urgentClass}">
+<div class="item${urgentClass}" id="row-${escapeHtml(item.key)}">
   <div class="row">
     <div class="body">
       <div class="subject">${escapeHtml(item.subject)}</div>
@@ -296,9 +309,10 @@ const renderItem = (item: InboxItem): string => {
         <span>${escapeHtml(item.displayLabel ?? item.id)}</span>
       </div>
     </div>
-    <div class="actions">${renderActions(item)}</div>
+    <div class="actions">${renderActions(item, returnTo)}</div>
   </div>
   <form class="nl-form" method="post" action="/inbox/rows/${encodeURIComponent(item.key)}/respond">
+    ${hiddenReturn(returnTo)}
     <input type="text" name="text" placeholder="reply in plain English — enqueues a work item for Po">
     <button>send</button>
   </form>
@@ -332,11 +346,16 @@ const renderSection = (
 ): string => {
   const title = SECTION_TITLES[section];
   const cls = SECTION_CLASS[section];
+  const sectionId = `section-${section}`;
   if (!items.length) {
-    return `<section class="section ${cls}"><h2>${title}</h2><div class="empty">${EMPTY_HINTS[section]}</div></section>`;
+    return `<section class="section ${cls}" id="${sectionId}"><h2>${title}</h2><div class="empty">${EMPTY_HINTS[section]}</div></section>`;
   }
-  const body = items.map(renderItem).join("");
-  return `<section class="section ${cls}"><h2>${title} (${items.length})</h2>${body}${extraBulk}</section>`;
+  const nextAnchor = (i: number): string =>
+    i + 1 < items.length
+      ? `/#row-${encodeURIComponent(items[i + 1].key)}`
+      : `/#${sectionId}`;
+  const body = items.map((it, i) => renderItem(it, nextAnchor(i))).join("");
+  return `<section class="section ${cls}" id="${sectionId}"><h2>${title} (${items.length})</h2>${body}${extraBulk}</section>`;
 };
 
 const renderTickBanner = (tick: CronTickStatus | null): string => {
@@ -347,6 +366,29 @@ const renderTickBanner = (tick: CronTickStatus | null): string => {
     : "";
   return `<div class="tick-banner${stale}">⟳ Cron tick in progress (started ${tick.age_minutes}m ago)${staleSuffix}<span class="id">${escapeHtml(tick.id)}</span></div>`;
 };
+
+const clientScript = `(function(){
+  if (typeof fetch !== 'function' || typeof DOMParser !== 'function') return;
+  var POLL_MS = 5000;
+  var isTyping = function(){
+    var a = document.activeElement;
+    return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'));
+  };
+  var refresh = function(){
+    if (isTyping()) return;
+    if (document.hidden) return;
+    fetch('/', { headers: { 'Cache-Control': 'no-cache' } })
+      .then(function(r){ if (!r.ok) throw new Error('bad status'); return r.text(); })
+      .then(function(html){
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var fresh = doc.getElementById('inbox-main');
+        var cur = document.getElementById('inbox-main');
+        if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+      })
+      .catch(function(){});
+  };
+  setInterval(refresh, POLL_MS);
+})();`;
 
 const renderPage = (
   dashboard: InboxDashboard,
@@ -360,7 +402,7 @@ const renderPage = (
       : "";
   const fyiBulk =
     dashboard.fyi.length + dashboard.anomalies.length > 0
-      ? `<div class="bulk"><form method="post" action="/inbox/mark-all-fyi-read"><button>mark all FYI + anomalies read</button></form></div>`
+      ? `<div class="bulk"><form method="post" action="/inbox/mark-all-fyi-read">${hiddenReturn("/#section-fyi")}<button>mark all FYI + anomalies read</button></form></div>`
       : "";
   const sections = SECTION_ORDER.map((s) =>
     renderSection(s, dashboard[s], s === "fyi" ? fyiBulk : ""),
@@ -370,16 +412,19 @@ const renderPage = (
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="5">
+<noscript><meta http-equiv="refresh" content="15"></noscript>
 <title>Inbox${total ? ` (${total})` : ""}</title>
 <style>${styles}</style>
 </head>
 <body>
+<div id="inbox-main">
 <h1>Inbox${total ? ` · ${total}` : ""}</h1>
 <div class="subtle">Refreshed ${now} · polls every 5s</div>
 ${renderTickBanner(tick)}
 ${zeroState}
 ${sections}
+</div>
+<script>${clientScript}</script>
 </body>
 </html>`;
 };
@@ -425,8 +470,15 @@ const sendHtml = (res: ServerResponse, body: string) => {
   res.end(body);
 };
 
-const finish = (res: ServerResponse, r: ActionResult) =>
-  r.ok ? sendRedirect(res) : sendText(res, 500, r.message);
+const safeReturn = (v: string | undefined): string => {
+  if (!v) return "/";
+  if (!v.startsWith("/")) return "/";
+  if (v.startsWith("//")) return "/";
+  return v;
+};
+
+const finish = (res: ServerResponse, r: ActionResult, returnTo = "/") =>
+  r.ok ? sendRedirect(res, returnTo) : sendText(res, 500, r.message);
 
 const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const method = req.method ?? "GET";
@@ -450,6 +502,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
 
     const raw = await readBody(req);
     const form = parseForm(raw);
+    const returnTo = safeReturn(form.returnTo);
 
     const routes: [RegExp, (m: RegExpMatchArray) => Promise<ActionResult>][] = [
       [
@@ -525,18 +578,18 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       if (result.detail) {
         return sendText(res, 200, `${result.message}\n\n${result.detail}`);
       }
-      return finish(res, result);
+      return finish(res, result, returnTo);
     }
 
     const respond = path.match(/^\/inbox\/rows\/([^/]+)\/respond$/);
     if (respond) {
       const rowKey = decodeURIComponent(respond[1]);
       const text = form.text ?? "";
-      return finish(res, await enqueueInboxResponse(rowKey, text));
+      return finish(res, await enqueueInboxResponse(rowKey, text), returnTo);
     }
 
     if (path === "/inbox/mark-all-fyi-read") {
-      return finish(res, await markAllFyiRead(collectDashboard()));
+      return finish(res, await markAllFyiRead(collectDashboard()), returnTo);
     }
 
     sendText(res, 404, "not found");
