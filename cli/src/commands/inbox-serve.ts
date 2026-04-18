@@ -3,22 +3,28 @@ import chalk from "chalk";
 import { getDb } from "../db.js";
 import {
   collectDashboard,
+  collectIdeasStats,
   getCronTickStatus,
   type CronTickStatus,
 } from "../inbox/data.js";
 import {
+  acceptAllSuggestKill,
+  acceptIdea,
   ackNotification,
   approveWorkItem,
   abandonWorkItem,
   archiveWorkItem,
   bumpWorkItem,
+  deferIdea,
   dismissSession,
   dispatchWorkItem,
   enqueueInboxResponse,
+  killIdea,
   killSession,
   markAllFyiRead,
   markPrReviewed,
   peekSession,
+  promoteIdea,
   retrySession,
   retryWorkItem,
   snoozeWorkItem,
@@ -29,6 +35,7 @@ import {
 import {
   SECTION_ORDER,
   SECTION_TITLES,
+  type IdeasSectionStats,
   type InboxDashboard,
   type InboxItem,
   type Section,
@@ -199,6 +206,40 @@ h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
   cursor: pointer;
   font-family: inherit;
 }
+.verdict {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.verdict.suggest-promote { background: var(--green); color: #0c1a0e; }
+.verdict.suggest-kill { background: var(--red); color: #fff; }
+.verdict.your-call { background: var(--amber); color: #241a05; }
+.chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  background: var(--border);
+  color: var(--fg);
+}
+.pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.ideas-footer { margin-top: 8px; }
+.ideas-footer button.danger { border-color: var(--red); color: var(--red); }
+.ideas-footer .confirm { color: var(--amber); font-size: 12px; margin-left: 8px; }
+.ideas-more { margin-top: 4px; color: var(--muted); font-size: 11px; }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
 `;
 
 const isHttpUrl = (s: string): boolean =>
@@ -281,11 +322,70 @@ const renderActions = (item: InboxItem, returnTo: string): string => {
       );
     case "recent-win":
       return btn(`/work-items/${id}/pr-reviewed`, "dismiss", returnTo);
+    case "idea": {
+      const verdict = item.ideaMeta?.verdict ?? "your-call";
+      const acceptDisabled = verdict === "your-call";
+      const acceptLabel =
+        verdict === "suggest-promote"
+          ? "accept (promote)"
+          : verdict === "suggest-kill"
+            ? "accept (kill)"
+            : "accept";
+      const acceptBtn = `<form method="post" action="/ideas/${id}/accept">${hiddenReturn(returnTo)}<button class="primary"${acceptDisabled ? ' disabled title="pick an explicit action"' : ""}>${acceptLabel}</button></form>`;
+      return (
+        acceptBtn +
+        btn(`/ideas/${id}/promote`, "promote", returnTo) +
+        btn(`/ideas/${id}/kill`, "kill", returnTo, "danger") +
+        btn(`/ideas/${id}/defer`, "defer 7d", returnTo)
+      );
+    }
   }
+};
+
+const renderIdeaBody = (item: InboxItem): string => {
+  const m = item.ideaMeta;
+  if (!m) return "";
+  const confPct = Math.round(m.confidence * 100);
+  const scorePct = Math.round(m.score * 100);
+  const repos = m.repos_guess.length
+    ? m.repos_guess
+        .map((r) => `<span class="chip">${escapeHtml(r)}</span>`)
+        .join(" ")
+    : "";
+  const rationale = m.rationale
+    ? `<div class="text">${escapeHtml(m.rationale)}</div>`
+    : "";
+  return `
+    ${rationale}
+    <div class="meta">
+      <span class="verdict ${escapeHtml(m.verdict)}">${escapeHtml(m.verdict)}</span>
+      <span class="pill">conf ${confPct}%</span>
+      <span class="pill">score ${scorePct}%</span>
+      ${repos}
+      <span>${escapeHtml(item.id)}</span>
+    </div>`;
 };
 
 const renderItem = (item: InboxItem, returnTo: string): string => {
   const urgentClass = item.urgency === "urgent" ? " urgent" : "";
+  // Idea rows use a richer body layout (verdict badge, rationale, chips).
+  if (item.kind === "idea") {
+    return `
+<div class="item${urgentClass}" id="row-${escapeHtml(item.key)}">
+  <div class="row">
+    <div class="body">
+      <div class="subject">${escapeHtml(item.subject)}</div>
+      ${renderIdeaBody(item)}
+    </div>
+    <div class="actions">${renderActions(item, returnTo)}</div>
+  </div>
+  <form class="nl-form" method="post" action="/inbox/rows/${encodeURIComponent(item.key)}/respond">
+    ${hiddenReturn(returnTo)}
+    <input type="text" name="text" placeholder="reply in plain English — enqueues a work item for Po">
+    <button>send</button>
+  </form>
+</div>`;
+  }
   const related = renderRelated(item.related_ids);
   const metaExtras = item.meta
     ? Object.entries(item.meta)
@@ -323,6 +423,7 @@ const SECTION_CLASS: Record<Section, string> = {
   needsDecision: "needs-decision",
   active: "active",
   queue: "queue",
+  ideas: "ideas",
   recentWins: "recent-wins",
   anomalies: "anomalies",
   fyi: "fyi",
@@ -333,6 +434,7 @@ const EMPTY_HINTS: Record<Section, string> = {
   needsDecision: "Nothing blocking.",
   active: "No workers running.",
   queue: "Queue is empty.",
+  ideas: "No ideas scored yet — Po triages on each tick.",
   recentWins: "No wins in the last 24h.",
   anomalies: "No stale or failed sessions.",
   fyi: "No FYI items.",
@@ -356,6 +458,48 @@ const renderSection = (
       : `/#${sectionId}`;
   const body = items.map((it, i) => renderItem(it, nextAnchor(i))).join("");
   return `<section class="section ${cls}" id="${sectionId}"><h2>${title} (${items.length})</h2>${body}${extraBulk}</section>`;
+};
+
+const renderIdeasSection = (
+  items: InboxItem[],
+  stats: IdeasSectionStats,
+  pendingConfirm: boolean,
+): string => {
+  const title = SECTION_TITLES["ideas"];
+  const cls = SECTION_CLASS["ideas"];
+  const sectionId = "section-ideas";
+  if (!items.length && stats.unscoredTotal === 0) {
+    return `<section class="section ${cls}" id="${sectionId}"><h2>${title}</h2><div class="empty">${EMPTY_HINTS["ideas"]}</div></section>`;
+  }
+  const top = items.slice(0, stats.topN);
+  const rest = items.slice(stats.topN);
+  const nextAnchor = (i: number, list: InboxItem[]): string =>
+    i + 1 < list.length
+      ? `/#row-${encodeURIComponent(list[i + 1].key)}`
+      : `/#${sectionId}`;
+  const topBody = top
+    .map((it, i) => renderItem(it, nextAnchor(i, top)))
+    .join("");
+  const hiddenMore = rest.length
+    ? `<details class="ideas-more-block"><summary>show ${rest.length} more scored</summary>${rest
+        .map((it, i) => renderItem(it, nextAnchor(i, rest)))
+        .join("")}</details>`
+    : "";
+  const unscoredLine = stats.unscoredTotal
+    ? `<div class="ideas-more">+${stats.unscoredTotal} still awaiting triage (Po scores on each tick)</div>`
+    : "";
+  const hasSuggestKill = items.some(
+    (it) => it.ideaMeta?.verdict === "suggest-kill",
+  );
+  const bulk = hasSuggestKill
+    ? `<div class="ideas-footer">${
+        pendingConfirm
+          ? `<form method="post" action="/ideas/accept-all-suggest-kill" style="display:inline">${hiddenReturn(`/#${sectionId}`)}<input type="hidden" name="confirm" value="1"><button class="danger">confirm: kill all suggest-kill</button></form><span class="confirm">click again to confirm</span>`
+          : `<form method="post" action="/ideas/accept-all-suggest-kill">${hiddenReturn(`/#${sectionId}?confirm-bulk-kill=1`)}<button class="danger">accept all suggest-kill</button></form>`
+      }</div>`
+    : "";
+  const countLabel = `${top.length}${rest.length ? ` of ${items.length}` : ""}`;
+  return `<section class="section ${cls}" id="${sectionId}"><h2>${title} (${countLabel})</h2>${topBody}${hiddenMore}${unscoredLine}${bulk}</section>`;
 };
 
 const renderTickBanner = (tick: CronTickStatus | null): string => {
@@ -392,21 +536,30 @@ const clientScript = `(function(){
 
 const renderPage = (
   dashboard: InboxDashboard,
+  ideasStats: IdeasSectionStats,
   tick: CronTickStatus | null,
+  confirmBulkKill: boolean,
 ): string => {
-  const total = SECTION_ORDER.reduce((sum, s) => sum + dashboard[s].length, 0);
+  const total = SECTION_ORDER.reduce(
+    (sum, s) => sum + (s === "ideas" ? 0 : dashboard[s].length),
+    0,
+  );
+  // Ideas don't count as "unread" totals — they're a browseable section.
   const now = new Date().toLocaleTimeString();
   const zeroState =
-    total === 0
+    total === 0 && dashboard.ideas.length === 0
       ? `<div class="zero-state">Inbox empty. Po has nothing for you.<span class="sig">— Po</span></div>`
       : "";
   const fyiBulk =
     dashboard.fyi.length + dashboard.anomalies.length > 0
       ? `<div class="bulk"><form method="post" action="/inbox/mark-all-fyi-read">${hiddenReturn("/#section-fyi")}<button>mark all FYI + anomalies read</button></form></div>`
       : "";
-  const sections = SECTION_ORDER.map((s) =>
-    renderSection(s, dashboard[s], s === "fyi" ? fyiBulk : ""),
-  ).join("\n");
+  const sections = SECTION_ORDER.map((s) => {
+    if (s === "ideas") {
+      return renderIdeasSection(dashboard.ideas, ideasStats, confirmBulkKill);
+    }
+    return renderSection(s, dashboard[s], s === "fyi" ? fyiBulk : "");
+  }).join("\n");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -483,12 +636,21 @@ const finish = (res: ServerResponse, r: ActionResult, returnTo = "/") =>
 const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const method = req.method ?? "GET";
   const url = req.url ?? "/";
-  const [pathRaw] = url.split("?");
+  const [pathRaw, qs = ""] = url.split("?");
   const path = decodeURI(pathRaw);
 
   try {
     if (method === "GET" && path === "/") {
-      sendHtml(res, renderPage(collectDashboard(), getCronTickStatus()));
+      const confirmBulkKill = /(^|&)confirm-bulk-kill=1(&|$)/.test(qs);
+      sendHtml(
+        res,
+        renderPage(
+          collectDashboard(),
+          collectIdeasStats(),
+          getCronTickStatus(),
+          confirmBulkKill,
+        ),
+      );
       return;
     }
     if (method === "GET" && path === "/healthz") {
@@ -569,6 +731,16 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         /^\/sessions\/([^/]+)\/ack$/,
         (m) => dismissSession(decodeURIComponent(m[1])),
       ],
+      [
+        /^\/ideas\/([^/]+)\/promote$/,
+        (m) => promoteIdea(decodeURIComponent(m[1])),
+      ],
+      [/^\/ideas\/([^/]+)\/kill$/, (m) => killIdea(decodeURIComponent(m[1]))],
+      [/^\/ideas\/([^/]+)\/defer$/, (m) => deferIdea(decodeURIComponent(m[1]))],
+      [
+        /^\/ideas\/([^/]+)\/accept$/,
+        (m) => acceptIdea(decodeURIComponent(m[1])),
+      ],
     ];
 
     for (const [re, handler] of routes) {
@@ -590,6 +762,17 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (path === "/inbox/mark-all-fyi-read") {
       return finish(res, await markAllFyiRead(collectDashboard()), returnTo);
+    }
+
+    if (path === "/ideas/accept-all-suggest-kill") {
+      const confirmed = form.confirm === "1";
+      const r = await acceptAllSuggestKill(confirmed);
+      // When not confirmed, the action bounces back to the section with the
+      // ?confirm-bulk-kill=1 flag so the page re-renders with a confirm UI.
+      if (!r.ok && !confirmed) {
+        return sendRedirect(res, "/?confirm-bulk-kill=1#section-ideas");
+      }
+      return finish(res, r, returnTo);
     }
 
     sendText(res, 404, "not found");
