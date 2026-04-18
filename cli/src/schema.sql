@@ -98,6 +98,18 @@ CREATE TABLE IF NOT EXISTS kv (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS followups (
+  id         TEXT PRIMARY KEY,
+  topic      TEXT NOT NULL,
+  context    TEXT NOT NULL DEFAULT '',
+  trigger    TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  raised_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(status);
+CREATE INDEX IF NOT EXISTS idx_followups_trigger ON followups(trigger);
+
 CREATE TABLE IF NOT EXISTS recurring_tasks (
   id             TEXT PRIMARY KEY,
   title          TEXT NOT NULL,
