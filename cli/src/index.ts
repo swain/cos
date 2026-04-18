@@ -30,6 +30,7 @@ import {
   cmdIdeaInsert,
 } from "./commands/ideas.js";
 import { cmdGenerateIdeasDiff } from "./commands/generate-ideas.js";
+import { cmdIdeaTriage } from "./generators/idea-triage.js";
 import {
   cmdNotify,
   cmdNotifyListUnpushed,
@@ -320,6 +321,25 @@ program
       since: opts.since,
       prLimit: opts.prLimit ? parseInt(opts.prLimit, 10) : undefined,
       verbose: !!opts.verbose,
+    }),
+  );
+
+program
+  .command("idea-triage")
+  .description(
+    "Score untriaged ideas against priorities / arch / queue via claude -p. Bounded by --limit (default 25).",
+  )
+  .option("--limit <n>", "max ideas to triage in this pass", "25")
+  .option(
+    "--from-file <path>",
+    "skip claude and read triage JSON from this file (for testing)",
+  )
+  .option("--dry-run", "print the triage prompt and exit", false)
+  .action((opts) =>
+    cmdIdeaTriage({
+      limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
+      fromFile: opts.fromFile,
+      dryRun: !!opts.dryRun,
     }),
   );
 

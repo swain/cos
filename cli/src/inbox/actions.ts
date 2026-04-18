@@ -1,6 +1,7 @@
 import { spawn, execSync } from "node:child_process";
 import { join } from "node:path";
-import { getDb, notifications, sessions, workItems } from "../db.js";
+import { ulid } from "ulid";
+import { getDb, ideas, notifications, sessions, workItems } from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
 import { COS_DIR, displayWorkItemId, tmuxWindowName } from "../util.js";
 import type { InboxDashboard, InboxItem } from "./types.js";
@@ -230,6 +231,97 @@ export const enqueueInboxResponse = async (
     ok: true,
     message: `enqueued ${wi ? displayWorkItemId(wi) : id}`,
   };
+};
+
+// Promotes an idea to a queued work item. We use the idea's own title and
+// description and an empty acceptance string — user can groom on dispatch.
+export const promoteIdea = async (id: string): Promise<ActionResult> => {
+  const idea = ideas.get(id);
+  if (!idea) return { ok: false, message: `idea not found: ${id}` };
+  if (idea.status !== "new")
+    return { ok: false, message: `idea ${id} already ${idea.status}` };
+  const wiId = `wi-${ulid()}`;
+  const { num, slug } = workItems.insert({
+    id: wiId,
+    title: idea.title,
+    description: idea.description,
+    acceptance_criteria: "",
+    repos: idea.repos_guess,
+    priority: 3,
+    status: "queued",
+    source: `idea:${id}`,
+    depends_on: [],
+    session_id: null,
+    pr_urls: [],
+    worklog_path: null,
+    worktree_paths: {},
+    needs_approval: false,
+    parent_id: null,
+    needs_planning: false,
+  });
+  ideas.update(id, { status: "promoted", promoted_to: wiId });
+  return {
+    ok: true,
+    message: `promoted ${id} → ${displayWorkItemId({ id: wiId, num, slug })}`,
+  };
+};
+
+export const killIdea = async (id: string): Promise<ActionResult> => {
+  const idea = ideas.get(id);
+  if (!idea) return { ok: false, message: `idea not found: ${id}` };
+  if (idea.status !== "new")
+    return { ok: false, message: `idea ${id} already ${idea.status}` };
+  ideas.update(id, { status: "killed" });
+  return { ok: true, message: `killed ${id}` };
+};
+
+export const deferIdea = async (id: string): Promise<ActionResult> => {
+  const idea = ideas.get(id);
+  if (!idea) return { ok: false, message: `idea not found: ${id}` };
+  if (idea.status !== "new")
+    return { ok: false, message: `idea ${id} already ${idea.status}` };
+  ideas.update(id, { status: "deferred" });
+  return { ok: true, message: `deferred ${id}` };
+};
+
+// "accept" applies the Po verdict: promote for suggest-promote, kill for
+// suggest-kill, no-op for your-call (user must pick explicitly).
+export const acceptIdea = async (id: string): Promise<ActionResult> => {
+  const idea = ideas.get(id);
+  if (!idea) return { ok: false, message: `idea not found: ${id}` };
+  if (idea.triage_verdict === "suggest-promote") return promoteIdea(id);
+  if (idea.triage_verdict === "suggest-kill") return killIdea(id);
+  if (idea.triage_verdict === "your-call")
+    return {
+      ok: false,
+      message: `idea ${id} is your-call — pick an explicit action`,
+    };
+  return { ok: false, message: `idea ${id} has no triage verdict yet` };
+};
+
+// Bulk hygiene action. Requires two submits to fire — the first call returns
+// ok=false with a "confirm" token; the second call, passing that token via
+// the `confirm` field on the POST form, actually kills the ideas. This keeps
+// the action one click away without making it a one-click disaster.
+export const acceptAllSuggestKill = async (
+  confirm: boolean,
+): Promise<ActionResult> => {
+  const candidates = ideas
+    .list({ status: "new" })
+    .filter((i) => i.triage_verdict === "suggest-kill");
+  if (!candidates.length) return { ok: true, message: "no suggest-kill ideas" };
+  if (!confirm) {
+    return {
+      ok: false,
+      message: `confirm to kill ${candidates.length} suggest-kill ideas`,
+    };
+  }
+  let killed = 0;
+  for (const idea of candidates) {
+    ideas.update(idea.id, { status: "killed" });
+    killed++;
+  }
+  return { ok: true, message: `killed ${killed} suggest-kill ideas` };
 };
 
 export const markAllFyiRead = async (

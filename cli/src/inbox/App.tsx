@@ -8,17 +8,21 @@ import {
 } from "./data.js";
 import {
   abandonWorkItem,
+  acceptIdea,
   ackNotification,
   approveWorkItem,
   archiveWorkItem,
   bumpWorkItem,
+  deferIdea,
   dismissSession,
   dispatchWorkItem,
   enqueueInboxResponse,
+  killIdea,
   killSession,
   markAllFyiRead,
   markPrReviewed,
   peekSession,
+  promoteIdea,
   retrySession,
   retryWorkItem,
   snoozeWorkItem,
@@ -143,6 +147,9 @@ const hintsFor = (item: InboxItem | null): string[] => {
       break;
     case "recent-win":
       hints.push("[d] dismiss");
+      break;
+    case "idea":
+      hints.push("[a] accept", "[p] promote", "[k] kill", "[f] defer");
       break;
   }
   if (item.related_ids.some(looksLikeUrl)) hints.push("[↵] open url");
@@ -445,6 +452,13 @@ export const App: React.FC = () => {
       case "recent-win":
         if (input === "d")
           return applyResult(await markPrReviewed(focusedItem.id));
+        break;
+      case "idea":
+        if (input === "a") return applyResult(await acceptIdea(focusedItem.id));
+        if (input === "p")
+          return applyResult(await promoteIdea(focusedItem.id));
+        if (input === "k") return applyResult(await killIdea(focusedItem.id));
+        if (input === "f") return applyResult(await deferIdea(focusedItem.id));
         break;
     }
 

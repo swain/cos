@@ -91,6 +91,18 @@ const migrate = (db: Database.Database) => {
   if (!hasColumn(db, "work_items", "slug")) {
     db.exec(`ALTER TABLE work_items ADD COLUMN slug TEXT NOT NULL DEFAULT ''`);
   }
+  if (!hasColumn(db, "ideas", "triage_verdict")) {
+    db.exec(`ALTER TABLE ideas ADD COLUMN triage_verdict TEXT`);
+  }
+  if (!hasColumn(db, "ideas", "triage_rationale")) {
+    db.exec(`ALTER TABLE ideas ADD COLUMN triage_rationale TEXT`);
+  }
+  if (!hasColumn(db, "ideas", "triage_score")) {
+    db.exec(`ALTER TABLE ideas ADD COLUMN triage_score REAL`);
+  }
+  if (!hasColumn(db, "ideas", "triaged_at")) {
+    db.exec(`ALTER TABLE ideas ADD COLUMN triaged_at TEXT`);
+  }
   // Indexes run after ALTER so they work on both fresh (schema.sql created the
   // columns) and migrated DBs (ALTER just created them).
   db.exec(
@@ -98,6 +110,9 @@ const migrate = (db: Database.Database) => {
   );
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_num_unique ON work_items(num) WHERE num IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_ideas_triaged_at ON ideas(triaged_at)`,
   );
   // Backfill num in created_at order (earliest = 1) and slug from title.
   const missing = db
@@ -158,6 +173,10 @@ const rowToIdea = (r: any): Idea => ({
   repos_guess: parseJson<string[]>(r.repos_guess, []),
   status: r.status,
   promoted_to: r.promoted_to,
+  triage_verdict: r.triage_verdict ?? null,
+  triage_rationale: r.triage_rationale ?? null,
+  triage_score: r.triage_score ?? null,
+  triaged_at: r.triaged_at ?? null,
   created_at: r.created_at,
 });
 
@@ -294,8 +313,17 @@ export const workItems = {
   },
 };
 
+export type IdeaInsert = Omit<
+  Idea,
+  | "created_at"
+  | "triage_verdict"
+  | "triage_rationale"
+  | "triage_score"
+  | "triaged_at"
+>;
+
 export const ideas = {
-  insert(i: Omit<Idea, "created_at">) {
+  insert(i: IdeaInsert) {
     const db = getDb();
     db.prepare(
       `INSERT INTO ideas (id, title, description, source, confidence, repos_guess, status, promoted_to)
@@ -330,6 +358,34 @@ export const ideas = {
     getDb()
       .prepare(`UPDATE ideas SET ${sets.join(", ")} WHERE id = @id`)
       .run(params);
+  },
+  // Writes the triage verdict, rationale, and score atomically and stamps
+  // triaged_at = now(). Used by the triage pass in `cos tick`; the dashboard
+  // treats `triaged_at IS NOT NULL` as "scored".
+  updateTriage(
+    id: string,
+    t: { verdict: string; rationale: string; score: number },
+  ) {
+    getDb()
+      .prepare(
+        `UPDATE ideas
+         SET triage_verdict = @verdict,
+             triage_rationale = @rationale,
+             triage_score = @score,
+             triaged_at = datetime('now')
+         WHERE id = @id`,
+      )
+      .run({ id, ...t });
+  },
+  listUntriaged(limit: number): Idea[] {
+    return (
+      getDb()
+        .prepare(
+          `SELECT * FROM ideas WHERE status = 'new' AND triaged_at IS NULL
+           ORDER BY created_at DESC LIMIT ?`,
+        )
+        .all(limit) as any[]
+    ).map(rowToIdea);
   },
 };
 

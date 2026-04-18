@@ -148,6 +148,47 @@ export const seedNotification = (db: SeedDb, row: NotifRow): string => {
   return id;
 };
 
+type IdeaRow = {
+  id?: string;
+  title: string;
+  description?: string;
+  source?: string;
+  confidence?: number;
+  repos_guess?: string[];
+  status?: string;
+  triage_verdict?: "suggest-promote" | "suggest-kill" | "your-call";
+  triage_rationale?: string;
+  triage_score?: number;
+  triaged_at?: string | null;
+};
+
+export const seedIdea = (db: SeedDb, row: IdeaRow): string => {
+  const id = row.id ?? `idea-${ulid()}`;
+  db.prepare(
+    `INSERT INTO ideas (
+      id, title, description, source, confidence, repos_guess, status, promoted_to,
+      triage_verdict, triage_rationale, triage_score, triaged_at
+    ) VALUES (
+      @id, @title, @description, @source, @confidence, @repos_guess, @status, NULL,
+      @triage_verdict, @triage_rationale, @triage_score,
+      CASE WHEN @triaged_at IS NULL AND @triage_verdict IS NOT NULL THEN datetime('now') ELSE @triaged_at END
+    )`,
+  ).run({
+    id,
+    title: row.title,
+    description: row.description ?? "",
+    source: row.source ?? "test",
+    confidence: row.confidence ?? 0.5,
+    repos_guess: JSON.stringify(row.repos_guess ?? ["cos"]),
+    status: row.status ?? "new",
+    triage_verdict: row.triage_verdict ?? null,
+    triage_rationale: row.triage_rationale ?? null,
+    triage_score: row.triage_score ?? null,
+    triaged_at: row.triaged_at ?? null,
+  });
+  return id;
+};
+
 type SignalRow = {
   id?: string;
   source?: string;

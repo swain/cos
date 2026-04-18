@@ -45,6 +45,13 @@ export const IdeaStatusSchema = z.enum([
 ]);
 export type IdeaStatus = z.infer<typeof IdeaStatusSchema>;
 
+export const TriageVerdictSchema = z.enum([
+  "suggest-promote",
+  "suggest-kill",
+  "your-call",
+]);
+export type TriageVerdict = z.infer<typeof TriageVerdictSchema>;
+
 export const IdeaSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -54,6 +61,10 @@ export const IdeaSchema = z.object({
   repos_guess: z.array(z.string()),
   status: IdeaStatusSchema,
   promoted_to: z.string().nullable(),
+  triage_verdict: TriageVerdictSchema.nullable(),
+  triage_rationale: z.string().nullable(),
+  triage_score: z.number().min(0).max(1).nullable(),
+  triaged_at: z.string().nullable(),
   created_at: z.string(),
 });
 export type Idea = z.infer<typeof IdeaSchema>;

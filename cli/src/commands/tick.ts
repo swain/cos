@@ -33,6 +33,7 @@ import { collectSlackSignals } from "../collectors/slack.js";
 import { cmdRenderStatus } from "./fleet.js";
 import { ideas } from "../db.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
+import { runIdeaTriage } from "../generators/idea-triage.js";
 
 const DEFAULT_CRON_PROMPT = `You are the COS (Chief of Staff) cron agent running a scheduled tick.
 
@@ -260,6 +261,23 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       console.error(
         chalk.yellow(`[tick] slack collection error: ${e.message}`),
       );
+    }
+
+    // 1f) Triage untriaged ideas so the inbox's IDEAS section has fresh
+    //     verdicts without waiting on a separate schedule. Bounded by the
+    //     generator's internal limit (default 25) so a big backlog can't
+    //     stall the tick. Skipped in --dry-run because it invokes claude.
+    if (!opts.dryRun) {
+      try {
+        const res = runIdeaTriage();
+        console.error(
+          chalk.gray(
+            `[tick] idea-triage: ${res.triaged}/${res.attempted} triaged${res.skipped ? ` skipped=${res.skipped}` : ""}${res.errorMessage ? ` err=${res.errorMessage}` : ""}`,
+          ),
+        );
+      } catch (e: any) {
+        console.error(chalk.yellow(`[tick] idea-triage error: ${e.message}`));
+      }
     }
 
     // 2) Prepare state snapshot for the claude invocation
