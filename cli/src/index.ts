@@ -28,6 +28,7 @@ import {
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
 import { cmdDoctor } from "./commands/doctor.js";
+import { cmdLogAppend } from "./commands/log.js";
 import { cmdInbox } from "./commands/inbox.js";
 import { cmdInboxServe } from "./commands/inbox-serve.js";
 import {
@@ -336,6 +337,14 @@ recurringCmd
   .command("disable <id>")
   .description("Disable a recurring task")
   .action((id) => cmdRecurringSetEnabled(id, false));
+
+program
+  .command("log-append <text>")
+  .description(
+    "Append an entry to decisions.log with an ISO timestamp. Use '-' as <text> to read from stdin.",
+  )
+  .option("--tick-id <id>", "include tick id in the entry header")
+  .action((text, opts) => cmdLogAppend(text, { tickId: opts.tickId }));
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);
