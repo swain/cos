@@ -38,23 +38,27 @@ test("IDEAS section renders verdict + rationale + actions for scored ideas", asy
 
   const promoteRow = page.locator(ideaRowSelector(promoteId));
   await expect(promoteRow).toBeVisible();
-  await expect(promoteRow.locator(".verdict.suggest-promote")).toBeVisible();
-  await expect(promoteRow.locator(".text")).toContainText("cheap, high ROI");
-  await expect(
-    promoteRow.locator('form[action$="/promote"] button'),
-  ).toBeVisible();
-  await expect(
-    promoteRow.locator('form[action$="/kill"] button'),
-  ).toBeVisible();
-  await expect(
-    promoteRow.locator('form[action$="/defer"] button'),
-  ).toBeVisible();
+  // Verdict is expressed as a modifier class on the row container.
+  await expect(promoteRow).toHaveClass(/idea--suggest-promote/);
+  // Rationale renders in the collapsed <details> summary as a one-line snippet.
+  await expect(promoteRow.locator(".idea__rationale-line")).toContainText(
+    "cheap, high ROI",
+  );
+  // Accept is the primary action and is always visible.
   await expect(
     promoteRow.locator('form[action$="/accept"] button'),
   ).toBeVisible();
+  // Secondary actions (kill, defer) live inside the collapsed <details>.
+  // They are attached to the DOM but not visible until the user expands.
+  await expect(
+    promoteRow.locator('form[action$="/kill"] button'),
+  ).toBeAttached();
+  await expect(
+    promoteRow.locator('form[action$="/defer"] button'),
+  ).toBeAttached();
 
   const killRow = page.locator(ideaRowSelector(killId));
-  await expect(killRow.locator(".verdict.suggest-kill")).toBeVisible();
+  await expect(killRow).toHaveClass(/idea--suggest-kill/);
 
   // Unscored idea is not in the rendered list; the "awaiting triage" line is.
   await expect(page.locator("#section-ideas .ideas-more")).toContainText(

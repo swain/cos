@@ -286,10 +286,17 @@ const sortIdeasForDashboard = (scored: Idea[]): Idea[] =>
     return b.confidence - a.confidence;
   });
 
-const ideaSubject = (idea: Idea): string => {
-  const title =
-    idea.title.length > 140 ? idea.title.slice(0, 137) + "…" : idea.title;
-  return title;
+// Generator-embedded prefix like `[ai-native:gp-api:dim4]` that gets prepended
+// to the title for dedupe. Keep it out of the rendered title — it's noise in a
+// triage surface — and surface it as a muted tag in the meta line instead.
+const TITLE_PREFIX_RE = /^\[([^\]]+)\]\s*/;
+
+const parseIdeaTitle = (
+  raw: string,
+): { subject: string; sourceTag: string | null } => {
+  const m = raw.match(TITLE_PREFIX_RE);
+  if (!m) return { subject: raw, sourceTag: null };
+  return { subject: raw.slice(m[0].length), sourceTag: m[1] };
 };
 
 // Returns the full sorted list of scored ideas plus a stats sidecar (unscored
@@ -302,24 +309,28 @@ const ideaItems = (): { items: InboxItem[]; stats: IdeasSectionStats } => {
   );
   const unscored = all.length - scored.length;
   const sorted = sortIdeasForDashboard(scored);
-  const items: InboxItem[] = sorted.map((i) => ({
-    key: `idea:${i.id}`,
-    kind: "idea" as const,
-    id: i.id,
-    section: "ideas" as const,
-    urgency: "normal" as const,
-    subject: ideaSubject(i),
-    body: i.triage_rationale ?? trimBody(i.description, 160),
-    related_ids: [],
-    created_at: i.created_at,
-    ideaMeta: {
-      verdict: i.triage_verdict as TriageVerdict,
-      rationale: i.triage_rationale ?? "",
-      score: i.triage_score ?? 0,
-      confidence: i.confidence,
-      repos_guess: i.repos_guess,
-    },
-  }));
+  const items: InboxItem[] = sorted.map((i) => {
+    const { subject, sourceTag } = parseIdeaTitle(i.title);
+    return {
+      key: `idea:${i.id}`,
+      kind: "idea" as const,
+      id: i.id,
+      section: "ideas" as const,
+      urgency: "normal" as const,
+      subject,
+      body: i.triage_rationale ?? trimBody(i.description, 160),
+      related_ids: [],
+      created_at: i.created_at,
+      ideaMeta: {
+        verdict: i.triage_verdict as TriageVerdict,
+        rationale: i.triage_rationale ?? "",
+        score: i.triage_score ?? 0,
+        confidence: i.confidence,
+        repos_guess: i.repos_guess,
+        sourceTag,
+      },
+    };
+  });
   return {
     items,
     stats: {
