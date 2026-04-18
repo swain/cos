@@ -323,6 +323,26 @@ export const cmdDispatch = (
     console.error(chalk.red(`spawn-worker exited with ${res.status}`));
     process.exit(res.status ?? 1);
   }
+  // Flip work_item.status immediately so fleet/doctor agree with reality.
+  // spawn-worker created a session via `cos session-new`; find it and bind it.
+  const spawned = [
+    ...sessions.list({ status: "starting" }),
+    ...sessions.list({ status: "running" }),
+  ]
+    .filter((s) => s.work_item_id === workItemId && s.kind === "worker")
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+  if (spawned) {
+    workItems.update(workItemId, {
+      status: "in-progress",
+      session_id: spawned.id,
+    });
+  } else {
+    console.error(
+      chalk.yellow(
+        `dispatch: spawn-worker returned 0 but no active session found for ${workItemId}; leaving status as-is`,
+      ),
+    );
+  }
 };
 
 export const cmdWorkerPrimaryWorktree = (workItemId: string) => {
