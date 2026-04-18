@@ -277,6 +277,14 @@ export const cmdDispatch = (
     process.exit(3);
   }
   if (!opts.force) {
+    if (wi.needs_planning) {
+      console.error(
+        chalk.yellow(
+          `skipped: ${workItemId} is flagged needs_planning — run \`cos plan ${workItemId}\` first, or use --force to bypass.`,
+        ),
+      );
+      process.exit(3);
+    }
     if (wi.priority > (cfg.auto_dispatch_max_priority ?? 3)) {
       console.error(
         chalk.yellow(
