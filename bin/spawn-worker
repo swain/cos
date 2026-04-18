@@ -38,7 +38,10 @@ mkdir -p "$HOME/.claude/cos/logs"
 #   2. trap EXIT — on ANY shell exit (normal OR signal like SIGHUP from tmux kill-window),
 #      call worker-done --failed with the log tail. The idempotency check in cmdWorkerDone
 #      ensures a successful worker-done --pr-url is not clobbered.
-CLAUDE_CMD="trap 'TAIL=\$(tail -c 1500 \"$WORKER_LOG\" 2>/dev/null | tr \"\\n\" \" \" | sed \"s/  */ /g\"); $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker shell exited. last output: \${TAIL:-<empty>}\" 2>/dev/null || true' EXIT; $CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\" < /dev/null 2>&1 | tee \"$WORKER_LOG\""
+#   3. trailing `; exit` — the shell would otherwise sit at an idle zsh prompt
+#      after claude finishes, leaving a ghost tmux window. Exiting the shell
+#      lets tmux close the window (remain-on-exit defaults off).
+CLAUDE_CMD="trap 'TAIL=\$(tail -c 1500 \"$WORKER_LOG\" 2>/dev/null | tr \"\\n\" \" \" | sed \"s/  */ /g\"); $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker shell exited. last output: \${TAIL:-<empty>}\" 2>/dev/null || true' EXIT; $CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\" < /dev/null 2>&1 | tee \"$WORKER_LOG\"; exit"
 tmux send-keys -t "$WINDOW_TARGET" "$CLAUDE_CMD" Enter
 
 echo "[spawn-worker] dispatched $WI_ID in tmux $WINDOW_TARGET"

@@ -295,13 +295,22 @@ launchctl kickstart gui/$(id -u)/com.smolster.cos.cron
 ### A worker is stuck
 
 ```bash
-tmux attach -t cos-workers   # then switch to its window to peek
+cos peek                       # read-only summary of every active worker
+cos peek <sess|wi|win-num>     # last 35 lines of that worker's log
+cos peek --attach              # only when you actually want a tmux takeover
 cos fleet --format json | jq '.active_sessions'
 # Mark it stale manually:
 cos session-mark-stale sess-<id>
 # Or kill it:
 tmux kill-window -t cos-workers:<window>
 ```
+
+`cos peek` (no args) prints a compact table — header counts (`N running, K idle, J stale`)
+plus one row per worker (sess id tail, work-item title, current step, heartbeat age, last
+log line). It exits cleanly to your shell. To inspect a specific worker, pass any of: a
+session id (or its trailing 6 chars as shown in the summary), a work-item id, or its tmux
+window number — `cos peek` resolves and tails `~/.claude/cos/logs/worker-<sess>.log`.
+The old "attach me to tmux" behavior is now opt-in via `--attach` (or `--tmux`).
 
 ### DB seems broken
 
@@ -367,6 +376,9 @@ cos followup-mark-raised <id>
 cos followup-mark-addressed <id>
 cos tick [--dry-run]              # run one cron tick manually
 cos doctor [--auto-fix] [--dry-run] [--format text|json]   # health-check + self-heal
+cos peek                          # summary table of active workers (no tmux takeover)
+cos peek <target> [-n <lines>]    # tail a worker's log (target: sess/wi prefix or window #)
+cos peek --attach                 # attach the cos-workers tmux session (old default)
 ```
 
 ## What's next (self-build queue)

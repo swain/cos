@@ -352,10 +352,25 @@ program
   .action(() => cmdInboxServe());
 
 program
-  .command("peek")
-  .description("Attach to the cos-workers tmux session (or list its windows)")
-  .option("--list", "list windows in the session instead of attaching", false)
-  .action((opts) => cmdPeek({ list: opts.list }));
+  .command("peek [target]")
+  .description(
+    "Default: print a summary table of active workers. With <target> (sess/wi prefix or window number), tail that worker's log. Use --attach for the old tmux behavior.",
+  )
+  .option("--attach", "attach the cos-workers tmux session", false)
+  .option("--tmux", "alias for --attach", false)
+  .option(
+    "--list",
+    "list windows in the tmux session instead of attaching",
+    false,
+  )
+  .option("-n, --lines <n>", "lines of log to tail when given a target", "35")
+  .action((target, opts) =>
+    cmdPeek(target, {
+      attach: opts.attach || opts.tmux,
+      list: opts.list,
+      lines: parseInt(opts.lines, 10),
+    }),
+  );
 
 const recurringCmd = program
   .command("recurring")
