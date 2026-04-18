@@ -2,34 +2,52 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { spawn } from "node:child_process";
 import {
-  collectInbox,
-  groupByBand,
+  collectDashboard,
   getCronTickStatus,
   type CronTickStatus,
 } from "./data.js";
 import {
+  abandonWorkItem,
   ackNotification,
   approveWorkItem,
+  archiveWorkItem,
+  bumpWorkItem,
+  dismissSession,
+  dispatchWorkItem,
+  enqueueInboxResponse,
+  killSession,
   markAllFyiRead,
+  markPrReviewed,
+  peekSession,
+  retrySession,
+  retryWorkItem,
   snoozeWorkItem,
   suppressSignal,
+  viewFailureLog,
   type ActionResult,
 } from "./actions.js";
-import type { Band, InboxItem } from "./types.js";
+import {
+  SECTION_ORDER,
+  SECTION_TITLES,
+  flattenDashboard,
+  type InboxDashboard,
+  type InboxItem,
+  type Section,
+} from "./types.js";
 
 const REFRESH_MS = 3000;
-const SECTION_LIMIT = 5;
-
-const SECTION_TITLES: Record<Band, string> = {
-  decision: "NEEDS DECISION",
-  fyi: "FYI",
-  digest: "DIGEST",
-};
+const PER_SECTION_LIMIT = 5;
 
 const URGENCY_COLOR: Record<InboxItem["urgency"], string | undefined> = {
   urgent: "red",
   normal: undefined,
   digest: "gray",
+};
+
+const SECTION_COLOR: Partial<Record<Section, string>> = {
+  needsDecision: "red",
+  active: "green",
+  anomalies: "yellow",
 };
 
 const fmtTime = (iso: string): string => {
@@ -49,7 +67,7 @@ const fmtTime = (iso: string): string => {
 };
 
 const fmtClock = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
 
 const looksLikeUrl = (s: string) => /^https?:\/\//.test(s);
 
@@ -57,27 +75,24 @@ const openInBrowser = (url: string) => {
   spawn("open", [url], { stdio: "ignore", detached: true }).unref();
 };
 
-type Section = {
-  band: Band;
+type RenderedSection = {
+  section: Section;
   total: number;
   visible: InboxItem[];
 };
 
-const buildSections = (items: InboxItem[]): Section[] => {
-  const grouped = groupByBand(items);
-  return (["decision", "fyi", "digest"] as Band[]).map((band) => {
-    const all = grouped[band];
-    const visible = band === "decision" ? all : all.slice(0, SECTION_LIMIT);
-    return { band, total: all.length, visible };
+const buildSections = (dashboard: InboxDashboard): RenderedSection[] =>
+  SECTION_ORDER.map((section) => {
+    const all = dashboard[section];
+    const visible =
+      section === "needsDecision" ? all : all.slice(0, PER_SECTION_LIMIT);
+    return { section, total: all.length, visible };
   });
-};
 
-type ItemRowProps = {
-  item: InboxItem;
-  focused: boolean;
-};
-
-const ItemRow: React.FC<ItemRowProps> = ({ item, focused }) => {
+const ItemRow: React.FC<{ item: InboxItem; focused: boolean }> = ({
+  item,
+  focused,
+}) => {
   const cursor = focused ? "▸ " : "  ";
   const tag = `[${item.urgency}]`;
   const time = fmtTime(item.created_at);
@@ -97,32 +112,55 @@ const ItemRow: React.FC<ItemRowProps> = ({ item, focused }) => {
   );
 };
 
+const hintsFor = (item: InboxItem | null): string[] => {
+  if (!item)
+    return ["[/] reply", "[m] mark FYI read", "[r] refresh", "[q] quit"];
+  const hints: string[] = ["[↑↓] nav", "[/] reply"];
+  switch (item.kind) {
+    case "notification":
+      hints.push("[a] ack");
+      break;
+    case "work-item":
+      hints.push("[A] approve", "[s] snooze");
+      break;
+    case "signal":
+      hints.push("[d] suppress");
+      break;
+    case "session":
+      hints.push("[r] retry", "[k] kill", "[d] dismiss");
+      break;
+    case "worker":
+      hints.push("[p] peek", "[k] kill");
+      break;
+    case "queue-item":
+      hints.push("[D] dispatch", "[b] bump", "[x] archive");
+      break;
+    case "pr-review":
+      hints.push("[↵] open", "[v] mark reviewed");
+      break;
+    case "blocked-item":
+      hints.push("[r] retry", "[l] log", "[x] abandon");
+      break;
+    case "recent-win":
+      hints.push("[d] dismiss");
+      break;
+  }
+  if (item.related_ids.some(looksLikeUrl)) hints.push("[↵] open url");
+  hints.push("[m] mark FYI read", "[?] help", "[q] quit");
+  return hints;
+};
+
 const Footer: React.FC<{
   focused: InboxItem | null;
   status: string | null;
-}> = ({ focused, status }) => {
-  const hints: string[] = ["[↑↓] nav"];
-  if (focused) {
-    if (focused.kind === "notification") hints.push("[a] ack");
-    if (focused.kind === "work-item") {
-      hints.push("[A] approve");
-      hints.push("[s] snooze");
-    }
-    if (focused.kind === "signal" || focused.kind === "notification")
-      hints.push("[d] suppress");
-    if (focused.related_ids.some(looksLikeUrl)) hints.push("[↵] open");
-  }
-  hints.push("[r] refresh");
-  hints.push("[m] mark fyi read");
-  hints.push("[?] help");
-  hints.push("[q] quit");
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      {status ? <Text color="cyan">{status}</Text> : null}
-      <Text color="gray">{hints.join("  ")}</Text>
-    </Box>
-  );
-};
+  detail: string | null;
+}> = ({ focused, status, detail }) => (
+  <Box flexDirection="column" marginTop={1}>
+    {detail ? <Text color="cyan">{detail}</Text> : null}
+    {status ? <Text color="cyan">{status}</Text> : null}
+    <Text color="gray">{hintsFor(focused).join("  ")}</Text>
+  </Box>
+);
 
 const HelpOverlay: React.FC = () => (
   <Box
@@ -136,32 +174,65 @@ const HelpOverlay: React.FC = () => (
       <Text color="cyan">↑/↓</Text> move cursor
     </Text>
     <Text>
+      <Text color="cyan">/</Text> compose natural-language reply (Po enqueues a
+      work item)
+    </Text>
+    <Text>
       <Text color="cyan">Enter</Text> open related URL in $BROWSER
     </Text>
     <Text>
-      <Text color="cyan">a</Text> ack notification (mark pushed)
+      <Text color="cyan">a</Text> ack notification
     </Text>
     <Text>
       <Text color="cyan">A</Text> approve + dispatch work item
     </Text>
     <Text>
-      <Text color="cyan">s</Text> snooze work item (priority +1)
+      <Text color="cyan">D</Text> dispatch queued item
     </Text>
     <Text>
-      <Text color="cyan">d</Text> suppress signal / dismiss notif
+      <Text color="cyan">b</Text> bump priority (queue) ·{" "}
+      <Text color="cyan">s</Text> snooze (work-item)
     </Text>
     <Text>
-      <Text color="cyan">r</Text> force refresh
+      <Text color="cyan">d</Text> dismiss (session/notification/recent-win) ·{" "}
+      <Text color="cyan">k</Text> kill (session/worker)
     </Text>
     <Text>
-      <Text color="cyan">m</Text> mark all FYI as read
+      <Text color="cyan">r</Text> retry (session/blocked) ·{" "}
+      <Text color="cyan">p</Text> peek tmux · <Text color="cyan">l</Text>{" "}
+      failure log
     </Text>
     <Text>
-      <Text color="cyan">?</Text> toggle this help
+      <Text color="cyan">v</Text> mark PR reviewed · <Text color="cyan">x</Text>{" "}
+      archive / abandon
     </Text>
     <Text>
-      <Text color="cyan">q</Text> quit
+      <Text color="cyan">m</Text> mark all FYI + anomalies read
     </Text>
+    <Text>
+      <Text color="cyan">?</Text> toggle this help · <Text color="cyan">q</Text>{" "}
+      quit
+    </Text>
+  </Box>
+);
+
+const ComposeOverlay: React.FC<{
+  item: InboxItem | null;
+  text: string;
+}> = ({ item, text }) => (
+  <Box
+    flexDirection="column"
+    borderStyle="round"
+    borderColor="cyan"
+    paddingX={1}
+  >
+    <Text bold>Reply to Po — enqueues a work item</Text>
+    <Text color="gray">target: {item ? item.key : "(no row focused)"}</Text>
+    <Text>
+      &gt; <Text color="white">{text}</Text>
+      <Text color="cyan">▌</Text>
+    </Text>
+    <Text color="gray">[Enter] send · [Esc] cancel</Text>
   </Box>
 );
 
@@ -179,17 +250,22 @@ const TickBanner: React.FC<{ tick: CronTickStatus }> = ({ tick }) => {
 
 export const App: React.FC = () => {
   const { exit } = useApp();
-  const [items, setItems] = useState<InboxItem[]>(() => collectInbox());
+  const [dashboard, setDashboard] = useState<InboxDashboard>(() =>
+    collectDashboard(),
+  );
   const [tickStatus, setTickStatus] = useState<CronTickStatus | null>(() =>
     getCronTickStatus(),
   );
   const [refreshedAt, setRefreshedAt] = useState<Date>(new Date());
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeText, setComposeText] = useState("");
 
   const refresh = useCallback(() => {
-    setItems(collectInbox());
+    setDashboard(collectDashboard());
     setTickStatus(getCronTickStatus());
     setRefreshedAt(new Date());
   }, []);
@@ -199,12 +275,12 @@ export const App: React.FC = () => {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const sections = useMemo(() => buildSections(items), [items]);
-
+  const sections = useMemo(() => buildSections(dashboard), [dashboard]);
   const flatVisible = useMemo(
     () => sections.flatMap((s) => s.visible),
     [sections],
   );
+  const flatAll = useMemo(() => flattenDashboard(dashboard), [dashboard]);
 
   useEffect(() => {
     if (flatVisible.length === 0) {
@@ -231,13 +307,51 @@ export const App: React.FC = () => {
     setCursorKey(flatVisible[next].key);
   };
 
+  const flashStatus = (msg: string, ms = 4000) => {
+    setStatus(msg);
+    setTimeout(() => setStatus(null), ms);
+  };
+
+  const flashDetail = (text: string, ms = 8000) => {
+    setDetail(text);
+    setTimeout(() => setDetail(null), ms);
+  };
+
   const applyResult = (r: ActionResult) => {
-    setStatus(r.message);
+    if (r.detail) flashDetail(r.detail);
+    flashStatus(r.message);
     refresh();
-    setTimeout(() => setStatus(null), 4000);
   };
 
   useInput(async (input, key) => {
+    if (composeOpen) {
+      if (key.escape) {
+        setComposeOpen(false);
+        setComposeText("");
+        return;
+      }
+      if (key.return) {
+        const target = focusedItem;
+        const text = composeText;
+        setComposeOpen(false);
+        setComposeText("");
+        if (!target) {
+          flashStatus("no row focused");
+          return;
+        }
+        applyResult(await enqueueInboxResponse(target.key, text));
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setComposeText((t) => t.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setComposeText((t) => t + input);
+      }
+      return;
+    }
+
     if (showHelp) {
       if (input === "?" || key.escape || input === "q") setShowHelp(false);
       return;
@@ -252,50 +366,91 @@ export const App: React.FC = () => {
       setShowHelp(true);
       return;
     }
-    if (input === "r") {
-      refresh();
-      setStatus("refreshed");
-      setTimeout(() => setStatus(null), 1500);
+    if (input === "/") {
+      setComposeOpen(true);
+      setComposeText("");
       return;
     }
     if (input === "m") {
-      applyResult(await markAllFyiRead(items));
+      applyResult(await markAllFyiRead(flatAll));
+      return;
+    }
+    if (input === "r" && !focusedItem) {
+      refresh();
+      flashStatus("refreshed", 1500);
       return;
     }
     if (!focusedItem) return;
+
     if (key.return) {
       const url = focusedItem.related_ids.find(looksLikeUrl);
       if (url) {
         openInBrowser(url);
-        setStatus(`opened ${url}`);
-        setTimeout(() => setStatus(null), 2000);
+        flashStatus(`opened ${url}`, 2000);
       } else {
-        setStatus("no related URL on focused item");
-        setTimeout(() => setStatus(null), 2000);
+        flashStatus("no related URL on focused item", 2000);
       }
       return;
     }
-    if (input === "a" && focusedItem.kind === "notification") {
-      applyResult(await ackNotification(focusedItem.id));
-      return;
+
+    switch (focusedItem.kind) {
+      case "notification":
+        if (input === "a" || input === "d")
+          return applyResult(await ackNotification(focusedItem.id));
+        break;
+      case "work-item":
+        if (input === "A")
+          return applyResult(await approveWorkItem(focusedItem.id));
+        if (input === "s")
+          return applyResult(await snoozeWorkItem(focusedItem.id));
+        break;
+      case "signal":
+        if (input === "d")
+          return applyResult(await suppressSignal(focusedItem.id));
+        break;
+      case "session":
+        if (input === "r")
+          return applyResult(await retrySession(focusedItem.id));
+        if (input === "k")
+          return applyResult(await killSession(focusedItem.id));
+        if (input === "d")
+          return applyResult(await dismissSession(focusedItem.id));
+        break;
+      case "worker":
+        if (input === "p")
+          return applyResult(await peekSession(focusedItem.id));
+        if (input === "k")
+          return applyResult(await killSession(focusedItem.id));
+        break;
+      case "queue-item":
+        if (input === "D")
+          return applyResult(await dispatchWorkItem(focusedItem.id));
+        if (input === "b")
+          return applyResult(await bumpWorkItem(focusedItem.id));
+        if (input === "x")
+          return applyResult(await archiveWorkItem(focusedItem.id));
+        break;
+      case "pr-review":
+        if (input === "v")
+          return applyResult(await markPrReviewed(focusedItem.id));
+        break;
+      case "blocked-item":
+        if (input === "r")
+          return applyResult(await retryWorkItem(focusedItem.id));
+        if (input === "l")
+          return applyResult(await viewFailureLog(focusedItem.id));
+        if (input === "x")
+          return applyResult(await abandonWorkItem(focusedItem.id));
+        break;
+      case "recent-win":
+        if (input === "d")
+          return applyResult(await markPrReviewed(focusedItem.id));
+        break;
     }
-    if (input === "A" && focusedItem.kind === "work-item") {
-      applyResult(await approveWorkItem(focusedItem.id));
-      return;
-    }
-    if (input === "s" && focusedItem.kind === "work-item") {
-      applyResult(await snoozeWorkItem(focusedItem.id));
-      return;
-    }
-    if (input === "d") {
-      if (focusedItem.kind === "signal") {
-        applyResult(await suppressSignal(focusedItem.id));
-        return;
-      }
-      if (focusedItem.kind === "notification") {
-        applyResult(await ackNotification(focusedItem.id));
-        return;
-      }
+
+    if (input === "r") {
+      refresh();
+      flashStatus("refreshed", 1500);
     }
   });
 
@@ -304,6 +459,14 @@ export const App: React.FC = () => {
       <Box flexDirection="column" padding={1}>
         <HelpOverlay />
         <Text color="gray">press ? or q to close</Text>
+      </Box>
+    );
+  }
+
+  if (composeOpen) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <ComposeOverlay item={focusedItem} text={composeText} />
       </Box>
     );
   }
@@ -322,29 +485,27 @@ export const App: React.FC = () => {
         </Box>
       ) : (
         sections.map((section) => {
+          if (section.total === 0) return null;
           const hidden = section.total - section.visible.length;
+          const color = SECTION_COLOR[section.section];
           return (
-            <Box key={section.band} flexDirection="column" marginTop={1}>
-              <Text bold>
-                {SECTION_TITLES[section.band]} ({section.total})
+            <Box key={section.section} flexDirection="column" marginTop={1}>
+              <Text bold color={color}>
+                {SECTION_TITLES[section.section]} ({section.total})
               </Text>
-              {section.visible.length === 0 ? (
-                <Text color="gray"> (none)</Text>
-              ) : (
-                section.visible.map((item) => (
-                  <ItemRow
-                    key={item.key}
-                    item={item}
-                    focused={item.key === cursorKey}
-                  />
-                ))
-              )}
+              {section.visible.map((item) => (
+                <ItemRow
+                  key={item.key}
+                  item={item}
+                  focused={item.key === cursorKey}
+                />
+              ))}
               {hidden > 0 ? <Text color="gray"> +{hidden} more</Text> : null}
             </Box>
           );
         })
       )}
-      <Footer focused={focusedItem} status={status} />
+      <Footer focused={focusedItem} status={status} detail={detail} />
     </Box>
   );
 };
