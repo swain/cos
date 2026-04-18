@@ -2,5 +2,6 @@
   "dispatch_paused": true,
   "daily_worker_cap": 8,
   "stale_heartbeat_minutes": 20,
-  "auto_dispatch_max_priority": 3
+  "auto_dispatch_max_priority": 3,
+  "cos_auto_merge": true
 }
