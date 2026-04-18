@@ -28,17 +28,24 @@ CREATE INDEX IF NOT EXISTS idx_work_items_status_priority ON work_items(status, 
 -- columns (CREATE INDEX fails if the column is missing even with IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS ideas (
-  id           TEXT PRIMARY KEY,
-  title        TEXT NOT NULL,
-  description  TEXT NOT NULL,
-  source       TEXT NOT NULL DEFAULT 'user',
-  confidence   REAL NOT NULL DEFAULT 0.5,
-  repos_guess  TEXT NOT NULL DEFAULT '[]',
-  status       TEXT NOT NULL DEFAULT 'new',
-  promoted_to  TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  id                TEXT PRIMARY KEY,
+  title             TEXT NOT NULL,
+  description       TEXT NOT NULL,
+  source            TEXT NOT NULL DEFAULT 'user',
+  confidence        REAL NOT NULL DEFAULT 0.5,
+  repos_guess       TEXT NOT NULL DEFAULT '[]',
+  status            TEXT NOT NULL DEFAULT 'new',
+  promoted_to       TEXT,
+  triage_verdict    TEXT,
+  triage_rationale  TEXT,
+  triage_score      REAL,
+  triaged_at        TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
+-- Partial index: the inbox dashboard only ever reads scored ideas, and the
+-- triage pass only ever touches unscored ones. A tiny index beats scanning.
+CREATE INDEX IF NOT EXISTS idx_ideas_triaged_at ON ideas(triaged_at);
 
 CREATE TABLE IF NOT EXISTS signals (
   id          TEXT PRIMARY KEY,
