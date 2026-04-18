@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pretest:e2e": "tsup",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
@@ -21,6 +23,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.7.0",
     "@types/react": "^18.3.12",

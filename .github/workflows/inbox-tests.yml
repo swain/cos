@@ -1,0 +1,39 @@
+name: inbox-tests
+
+on:
+  pull_request:
+    paths:
+      - cli/src/inbox/**
+      - cli/src/commands/inbox-serve.ts
+      - cli/src/db.ts
+      - cli/src/schema.sql
+      - cli/test/**
+      - cli/playwright.config.ts
+      - cli/package.json
+      - cli/package-lock.json
+      - .github/workflows/inbox-tests.yml
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci
+      - name: install playwright browsers
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: cli/playwright-report/
+          retention-days: 7
