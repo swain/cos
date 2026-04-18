@@ -68,6 +68,9 @@ const migrate = (db: Database.Database) => {
   if (!hasColumn(db, "sessions", "acked_at")) {
     db.exec(`ALTER TABLE sessions ADD COLUMN acked_at TEXT`);
   }
+  if (!hasColumn(db, "work_items", "inbox_acked_at")) {
+    db.exec(`ALTER TABLE work_items ADD COLUMN inbox_acked_at TEXT`);
+  }
 };
 
 const rowToWorkItem = (r: any): WorkItem => ({
@@ -85,6 +88,7 @@ const rowToWorkItem = (r: any): WorkItem => ({
   worklog_path: r.worklog_path,
   worktree_paths: parseJson<Record<string, string>>(r.worktree_paths, {}),
   needs_approval: !!r.needs_approval,
+  inbox_acked_at: r.inbox_acked_at ?? null,
   created_at: r.created_at,
   updated_at: r.updated_at,
   completed_at: r.completed_at,
