@@ -98,6 +98,54 @@ Nothing bypasses the queue:
 - **"triage ideas"** or `/groom` — walks the ideas backlog one at a time. Promote the good ones, defer or kill the rest. COS does this with you in a conversation.
 - Optionally: **"weekly review"** on Fridays (self-build item #8) — digest of what shipped, what stalled, where priorities drifted.
 
+## The inbox (TUI + web)
+
+Two surfaces, same data: a synthesized dashboard of what actually needs your attention.
+
+```bash
+cos inbox          # TUI (ink + React) — keyboard driven
+cos inbox-serve    # local HTTP at http://127.0.0.1:4411 — opens in any browser
+```
+
+Both pull from `cli/src/inbox/data.ts::collectDashboard()` and render seven sections in priority order:
+
+| Section            | What's in it                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **NEEDS DECISION** | blocked items, urgent unacked notifications, signals, PRs awaiting your review (`thegoodparty/*` only — cos PRs auto-merge), and queued items flagged `needs_approval` |
+| **ACTIVE**         | workers currently running — session id, current step, heartbeat age, work-item title                                                                                   |
+| **QUEUE**          | top 10 queued items in priority order                                                                                                                                  |
+| **RECENT WINS**    | items merged/done in the last 24h with PR URLs                                                                                                                         |
+| **ANOMALIES**      | stale or failed sessions with last-heartbeat delta and notes                                                                                                           |
+| **FYI**            | normal-urgency notifications, deprioritized                                                                                                                            |
+| **DIGEST**         | digest-tier notifications                                                                                                                                              |
+
+### Per-row actions
+
+Every row has at least one action (button in the web UI, keybinding in TUI). Pick the row with `↑/↓` in TUI; web is point-and-click.
+
+| Row kind                     | Actions                                                                   | TUI keys        |
+| ---------------------------- | ------------------------------------------------------------------------- | --------------- |
+| notification                 | ack                                                                       | `a` or `d`      |
+| work-item (pending approval) | approve & dispatch · snooze (priority +1)                                 | `A` · `s`       |
+| signal                       | suppress                                                                  | `d`             |
+| session (stale/failed)       | retry (re-dispatch the work item) · kill tmux window · dismiss (acked_at) | `r` · `k` · `d` |
+| worker (running)             | peek (prints `tmux attach` hint) · kill                                   | `p` · `k`       |
+| queue-item                   | dispatch now · bump priority · archive                                    | `D` · `b` · `x` |
+| pr-review                    | open in github · mark reviewed (sets `inbox_acked_at`)                    | `↵` · `v`       |
+| blocked-item                 | retry · view failure log (tail of session notes) · abandon                | `r` · `l` · `x` |
+| recent-win                   | dismiss                                                                   | `d`             |
+
+Bulk: **mark all FYI + anomalies read** (`m` in TUI, button in web) — clears notifications _and_ dismisses session-kind anomaly rows so they actually disappear on the next refresh.
+
+### Reply in plain English (per row)
+
+Every row has a freeform reply box. Type whatever you want and it enqueues a `handle inbox response: <text>` work item at priority 2, referencing the row. Po picks it up on the next tick.
+
+- **Web:** the textbox at the bottom of each card; press _send_.
+- **TUI:** focus the row, hit `/` to open compose, type, `Enter` to send (`Esc` to cancel).
+
+This is the answer to "how do I tell Po what to do with that row?" — no button matrix, just say it.
+
 ## What to say (and what happens)
 
 | You say                                                           | What happens under the hood                                                                  |
