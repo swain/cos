@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS work_items (
   completed_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_work_items_status_priority ON work_items(status, priority);
-CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id);
+-- Note: idx_work_items_parent_id is created by migrate() in db.ts so it works
+-- on pre-existing DBs where the column is added via ALTER TABLE.
 
 CREATE TABLE IF NOT EXISTS ideas (
   id           TEXT PRIMARY KEY,
