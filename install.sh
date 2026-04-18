@@ -64,7 +64,7 @@ link_if_missing "$REPO_ROOT/launchd" "$COS_DIR/launchd"
 
 echo
 echo "==> Symlinking slash commands into ${COMMANDS_DIR}…"
-for f in fleet.md enqueue.md cos.md groom.md dispatch.md; do
+for f in fleet.md enqueue.md cos.md groom.md dispatch.md weekly.md; do
   link_if_missing "$REPO_ROOT/commands/$f" "$COMMANDS_DIR/$f"
 done
 

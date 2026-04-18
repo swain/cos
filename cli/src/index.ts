@@ -41,6 +41,7 @@ import {
   cmdRecurringSetEnabled,
 } from "./commands/recurring.js";
 import { cmdGenerateAiNative } from "./commands/generators.js";
+import { cmdReviewWeek } from "./commands/review.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -362,6 +363,17 @@ recurringCmd
   .command("disable <id>")
   .description("Disable a recurring task")
   .action((id) => cmdRecurringSetEnabled(id, false));
+
+program
+  .command("review-week")
+  .description(
+    "Generate the weekly review digest (writes to ~/.claude/cos/reviews/YYYY-WW.md and queues a notification)",
+  )
+  .option("--no-notify", "skip queuing a notification")
+  .option("--stdout", "print to stdout; do not write file or notify", false)
+  .action((opts) =>
+    cmdReviewWeek({ notify: opts.notify, stdout: !!opts.stdout }),
+  );
 
 program
   .command("log-append <text>")
