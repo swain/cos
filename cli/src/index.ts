@@ -42,6 +42,12 @@ import {
 } from "./commands/recurring.js";
 import { cmdGenerateAiNative } from "./commands/generators.js";
 import { cmdReviewWeek } from "./commands/review.js";
+import {
+  cmdFollowupInsert,
+  cmdFollowupList,
+  cmdFollowupMarkRaised,
+  cmdFollowupMarkAddressed,
+} from "./commands/followups.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -382,6 +388,41 @@ program
   )
   .option("--tick-id <id>", "include tick id in the entry header")
   .action((text, opts) => cmdLogAppend(text, { tickId: opts.tickId }));
+
+program
+  .command("followup")
+  .description(
+    "Record a dialog-mode followup to raise with me at the right moment",
+  )
+  .requiredOption("--topic <t>", "short topic label")
+  .requiredOption(
+    "--trigger <t>",
+    "next-dialog | before-meeting:<name> | before-workitem:<wi-id> | after-date:<iso>",
+  )
+  .option("--context <c>", "why this matters / what to press on", "")
+  .action((opts) =>
+    cmdFollowupInsert({
+      topic: opts.topic,
+      context: opts.context,
+      trigger: opts.trigger,
+    }),
+  );
+
+program
+  .command("followups")
+  .description("List followups")
+  .option("--status <s>", "filter by status (open|raised|addressed|dropped)")
+  .action((opts) => cmdFollowupList(opts.status));
+
+program
+  .command("followup-mark-raised <id>")
+  .description("Mark a followup as raised (surfaced in dialog)")
+  .action((id) => cmdFollowupMarkRaised(id));
+
+program
+  .command("followup-mark-addressed <id>")
+  .description("Mark a followup as addressed (dialog complete)")
+  .action((id) => cmdFollowupMarkAddressed(id));
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);

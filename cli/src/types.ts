@@ -124,6 +124,38 @@ export const NotificationSchema = z.object({
 });
 export type Notification = z.infer<typeof NotificationSchema>;
 
+export const FollowupStatusSchema = z.enum([
+  "open",
+  "raised",
+  "addressed",
+  "dropped",
+]);
+export type FollowupStatus = z.infer<typeof FollowupStatusSchema>;
+
+// Trigger forms: next-dialog | before-meeting:<name> | before-workitem:<wi-id> | after-date:<iso>
+export const FollowupTriggerSchema = z
+  .string()
+  .refine(
+    (s) =>
+      s === "next-dialog" ||
+      /^before-meeting:.+/.test(s) ||
+      /^before-workitem:.+/.test(s) ||
+      /^after-date:.+/.test(s),
+    "trigger must be one of: next-dialog | before-meeting:<name> | before-workitem:<wi-id> | after-date:<iso>",
+  );
+export type FollowupTrigger = z.infer<typeof FollowupTriggerSchema>;
+
+export const FollowupSchema = z.object({
+  id: z.string(),
+  topic: z.string(),
+  context: z.string(),
+  trigger: FollowupTriggerSchema,
+  status: FollowupStatusSchema,
+  created_at: z.string(),
+  raised_at: z.string().nullable(),
+});
+export type Followup = z.infer<typeof FollowupSchema>;
+
 export const RecurringTaskStatusSchema = z.enum(["ok", "failed"]);
 export type RecurringTaskStatus = z.infer<typeof RecurringTaskStatusSchema>;
 

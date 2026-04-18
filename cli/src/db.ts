@@ -18,6 +18,7 @@ import type {
   Session,
   Notification,
   RecurringTask,
+  Followup,
 } from "./types.js";
 
 let _db: Database.Database | null = null;
@@ -519,6 +520,55 @@ export const cronTicks = {
       )
       .get() as any;
     return r ?? null;
+  },
+};
+
+const rowToFollowup = (r: any): Followup => ({
+  id: r.id,
+  topic: r.topic,
+  context: r.context,
+  trigger: r.trigger,
+  status: r.status,
+  created_at: r.created_at,
+  raised_at: r.raised_at,
+});
+
+export const followups = {
+  insert(f: Omit<Followup, "created_at" | "raised_at">) {
+    getDb()
+      .prepare(
+        `INSERT INTO followups (id, topic, context, trigger, status)
+         VALUES (@id, @topic, @context, @trigger, @status)`,
+      )
+      .run(f);
+  },
+  get(id: string): Followup | null {
+    const r = getDb()
+      .prepare(`SELECT * FROM followups WHERE id = ?`)
+      .get(id) as any;
+    return r ? rowToFollowup(r) : null;
+  },
+  list(filter?: { status?: string }): Followup[] {
+    let sql = `SELECT * FROM followups WHERE 1=1`;
+    const params: any = {};
+    if (filter?.status) {
+      sql += ` AND status = @status`;
+      params.status = filter.status;
+    }
+    sql += ` ORDER BY created_at ASC`;
+    return (getDb().prepare(sql).all(params) as any[]).map(rowToFollowup);
+  },
+  markRaised(id: string) {
+    getDb()
+      .prepare(
+        `UPDATE followups SET status = 'raised', raised_at = datetime('now') WHERE id = ?`,
+      )
+      .run(id);
+  },
+  markAddressed(id: string) {
+    getDb()
+      .prepare(`UPDATE followups SET status = 'addressed' WHERE id = ?`)
+      .run(id);
   },
 };
 

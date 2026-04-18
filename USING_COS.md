@@ -32,6 +32,7 @@ If you ever catch yourself forming a CLI command in your head, you're working to
 │  signals            │  inbound events (GH, etc)
 │  sessions           │  active workers
 │  notifications      │  outbound pushes
+│  followups          │  dialog-mode topics to raise
 │  cos_log            │  tick summary rows
 └─────────┬───────────┘
           │
@@ -350,6 +351,10 @@ cos idea-promote <idea-id> --priority N --repos '[...]' --acceptance "..."
 cos notify --subject ... [--body ...] [--urgency urgent|normal|digest]
 cos notify-unpushed
 cos notify-mark-pushed <id>
+cos followup --topic ... --trigger <next-dialog|before-meeting:<name>|before-workitem:<wi-id>|after-date:<iso>> [--context ...]
+cos followups [--status open|raised|addressed|dropped]
+cos followup-mark-raised <id>
+cos followup-mark-addressed <id>
 cos tick [--dry-run]              # run one cron tick manually
 cos doctor [--auto-fix] [--dry-run] [--format text|json]   # health-check + self-heal
 ```
