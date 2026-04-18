@@ -26,6 +26,7 @@ import {
 } from "../util.js";
 import { collectGithubSignals } from "../collectors/github.js";
 import { collectGrafanaSignals } from "../collectors/grafana.js";
+import { runCalendarCollector } from "../collectors/calendar.js";
 import { cmdRenderStatus } from "./fleet.js";
 import { ideas } from "../db.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
@@ -147,6 +148,29 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       console.error(
         chalk.yellow(`[tick] grafana collection error: ${e.message}`),
       );
+    }
+
+    // 1c) Collect calendar + meeting-prep — spawns claude with MCP tools.
+    //     Writes prep files to ~/.claude/cos/meetings/, emits
+    //     meeting-prep-ready signals, and records urgent notifications.
+    //     Skipped in --dry-run because it is itself a claude invocation.
+    if (!opts.dryRun) {
+      try {
+        const res = runCalendarCollector();
+        if (!res.ran) {
+          console.error(
+            chalk.gray(`[tick] calendar: skipped (${res.reason ?? "?"})`),
+          );
+        } else {
+          console.error(
+            chalk.gray(
+              `[tick] calendar: exit ${res.exitCode ?? "null"}${res.reason ? ` (${res.reason})` : ""}`,
+            ),
+          );
+        }
+      } catch (e: any) {
+        console.error(chalk.yellow(`[tick] calendar error: ${e.message}`));
+      }
     }
 
     // 2) Prepare state snapshot for the claude invocation

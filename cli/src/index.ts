@@ -15,7 +15,9 @@ import {
 import {
   cmdSignalsList,
   cmdSignalTriage,
+  cmdSignalAdd,
   cmdCollectGithub,
+  cmdCollectCalendar,
 } from "./commands/signals.js";
 import {
   cmdIdeasList,
@@ -187,9 +189,35 @@ program
   );
 
 program
+  .command("signal-add")
+  .description("Insert a signal (deduped on source+kind+external-id)")
+  .requiredOption("--source <s>")
+  .requiredOption("--kind <k>")
+  .option("--external-id <id>")
+  .option("--payload <json>", "JSON payload", "{}")
+  .action((opts) => {
+    cmdSignalAdd({
+      source: opts.source,
+      kind: opts.kind,
+      externalId: opts.externalId,
+      payload: opts.payload ? JSON.parse(opts.payload) : {},
+    });
+  });
+
+program
   .command("collect-github")
   .description("Run the GitHub signal collector")
   .action(() => cmdCollectGithub());
+
+program
+  .command("collect-calendar")
+  .description(
+    "Run the Google Calendar collector (spawns claude -p with MCP tools)",
+  )
+  .option("--timeout-ms <n>", "subprocess timeout in milliseconds", "180000")
+  .action((opts) =>
+    cmdCollectCalendar({ timeoutMs: parseInt(opts.timeoutMs, 10) }),
+  );
 
 program
   .command("ideas")
