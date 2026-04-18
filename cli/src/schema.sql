@@ -43,9 +43,9 @@ CREATE TABLE IF NOT EXISTS ideas (
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
--- Partial index: the inbox dashboard only ever reads scored ideas, and the
--- triage pass only ever touches unscored ones. A tiny index beats scanning.
-CREATE INDEX IF NOT EXISTS idx_ideas_triaged_at ON ideas(triaged_at);
+-- Note: idx_ideas_triaged_at is created by migrate() in db.ts so this file
+-- stays safe on pre-triage databases (CREATE INDEX fails if the column
+-- is missing, even with IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS signals (
   id          TEXT PRIMARY KEY,
