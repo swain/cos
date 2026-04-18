@@ -67,6 +67,26 @@ export const cmdWorkerDone = (
     return;
   }
   if (opts.failed) {
+    // Idempotency: never clobber a completed session with failed. The safety-net
+    // in spawn-worker fires unconditionally after claude -p exits; if the worker
+    // already called --pr-url successfully, respect that and no-op.
+    if (s.status === "completed") {
+      console.log(
+        chalk.gray("worker-done --failed ignored"),
+        sessionId,
+        "(already completed)",
+      );
+      return;
+    }
+    // Also no-op if already marked failed/killed, to keep the record idempotent.
+    if (s.status === "failed" || s.status === "killed") {
+      console.log(
+        chalk.gray("worker-done --failed ignored"),
+        sessionId,
+        `(already ${s.status})`,
+      );
+      return;
+    }
     sessions.update(sessionId, {
       status: "failed",
       current_step: "failed",
@@ -252,7 +272,6 @@ export const cmdDispatch = (
   }
   const cfg = parseJson<{
     dispatch_paused?: boolean;
-    daily_worker_cap?: number;
     auto_dispatch_max_priority?: number;
   }>(readFileSync(CONFIG_JSON, "utf8"), {});
   if (cfg.dispatch_paused && !opts.force) {

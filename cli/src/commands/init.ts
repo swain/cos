@@ -37,7 +37,6 @@ export const cmdInit = () => {
       JSON.stringify(
         {
           dispatch_paused: true,
-          daily_worker_cap: 8,
           stale_heartbeat_minutes: 20,
           auto_dispatch_max_priority: 3,
         },

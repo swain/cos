@@ -61,7 +61,15 @@ tmux new-window -t "$TMUX_SESSION" -n "$WINDOW_NAME" -c "$PRIMARY_WT"
 WINDOW_TARGET="$TMUX_SESSION:$WINDOW_NAME"
 
 # 7. Launch claude with the prompt (reads from file to avoid shell quoting pain).
-CLAUDE_CMD="$CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\"; $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker exited without calling worker-done\" 2>/dev/null || true"
+#    - All output (stdout+stderr) is tee'd to a per-session log file so the safety-net
+#      has rich context to put in the failure reason.
+#    - The --failed safety-net is idempotent now (see cmdWorkerDone): if the worker
+#      already called worker-done --pr-url successfully, this is a no-op. If the
+#      worker genuinely exited without calling worker-done, the tail of its stdout
+#      becomes the failure reason — much more useful than "worker exited ...".
+WORKER_LOG="$HOME/.claude/cos/logs/worker-$SESSION_ID.log"
+mkdir -p "$HOME/.claude/cos/logs"
+CLAUDE_CMD="$CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\" 2>&1 | tee \"$WORKER_LOG\"; TAIL=\$(tail -c 1500 \"$WORKER_LOG\" 2>/dev/null | tr '\\n' ' ' | sed 's/  */ /g'); $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker exited without calling worker-done. last output: \${TAIL:-<empty>}\" 2>/dev/null || true"
 tmux send-keys -t "$WINDOW_TARGET" "$CLAUDE_CMD" Enter
 
 # 8. Record tmux window on the session row so fleet view can link to it.

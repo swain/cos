@@ -19,7 +19,7 @@ For each signal in the snapshot with `status=new`:
 
 ### 2. DISPATCH ready work items
 
-List queued items: `cos fleet --format json | jq '.queued'`. For each one where `priority <= config.auto_dispatch_max_priority` and `repos` is set and `acceptance_criteria` is non-empty, run `cos dispatch <wi-id>`. Respect the daily cap in `~/.claude/cos/config.json`.
+List queued items: `cos fleet --format json | jq '.queued'`. For each one where `priority <= config.auto_dispatch_max_priority` and `repos` is set and `acceptance_criteria` is non-empty, run `cos dispatch <wi-id>`. No daily cap — dispatch every eligible item in priority order.
 
 If `dispatch_paused=true` in config.json, skip this step silently.
 

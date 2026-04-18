@@ -41,7 +41,7 @@ Your job this tick, in order:
    - PR-comments-on-mine: create a work item at priority 2 to address comments, unless the PR is already in pr-open state for a work item, in which case notify urgent to the user.
    - PR-merged: suppress (it's handled by the worker-done flow) or notify digest.
 
-2. DISPATCH ready work items. For each queued work item eligible for auto-dispatch (config.json auto_dispatch_max_priority and dispatch_paused apply), run \`cos dispatch <wi-id>\`. Respect daily worker cap.
+2. DISPATCH ready work items. For each queued work item eligible for auto-dispatch (config.json auto_dispatch_max_priority and dispatch_paused apply), run \`cos dispatch <wi-id>\`. No daily cap — dispatch every eligible item.
 
 3. PUSH notifications. Read \`cos notify-unpushed\`. For each urgent or normal notification, call the PushNotification tool with subject+body. Then \`cos notify-mark-pushed <id>\`.
 
