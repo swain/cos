@@ -27,6 +27,7 @@ import {
 import { collectGithubSignals } from "../collectors/github.js";
 import { collectGrafanaSignals } from "../collectors/grafana.js";
 import { runCalendarCollector } from "../collectors/calendar.js";
+import { collectClickupSignals } from "../collectors/clickup.js";
 import { cmdRenderStatus } from "./fleet.js";
 import { ideas } from "../db.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
@@ -171,6 +172,34 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       } catch (e: any) {
         console.error(chalk.yellow(`[tick] calendar error: ${e.message}`));
       }
+    }
+
+    // 1d) Collect ClickUp signals
+    try {
+      const collected = await collectClickupSignals();
+      let inserted = 0;
+      for (const s of collected) {
+        const id = `sig-${ulid()}`;
+        const res = signals.insert({
+          id,
+          source: s.source,
+          kind: s.kind,
+          external_id: s.external_id,
+          payload: s.payload,
+          status: "new",
+          triaged_at: null,
+        });
+        if (res.inserted) inserted++;
+      }
+      console.error(
+        chalk.gray(
+          `[tick] clickup: ${inserted} new / ${collected.length} checked`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(
+        chalk.yellow(`[tick] clickup collection error: ${e.message}`),
+      );
     }
 
     // 2) Prepare state snapshot for the claude invocation

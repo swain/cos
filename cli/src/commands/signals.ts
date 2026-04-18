@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { signals, ideas, workItems, notifications } from "../db.js";
 import { collectGithubSignals } from "../collectors/github.js";
 import { runCalendarCollector } from "../collectors/calendar.js";
+import { collectClickupSignals } from "../collectors/clickup.js";
 import type { Signal } from "../types.js";
 
 export const cmdSignalsList = (filter?: {
@@ -175,5 +176,28 @@ export const cmdCollectGithub = async () => {
   }
   console.log(
     chalk.gray(`github signals: ${inserted} new (${collected.length} checked)`),
+  );
+};
+
+export const cmdCollectClickup = async () => {
+  const collected = await collectClickupSignals();
+  let inserted = 0;
+  for (const s of collected) {
+    const id = `sig-${ulid()}`;
+    const res = signals.insert({
+      id,
+      source: s.source,
+      kind: s.kind,
+      external_id: s.external_id,
+      payload: s.payload,
+      status: "new",
+      triaged_at: null,
+    } satisfies Omit<Signal, "created_at">);
+    if (res.inserted) inserted++;
+  }
+  console.log(
+    chalk.gray(
+      `clickup signals: ${inserted} new (${collected.length} checked)`,
+    ),
   );
 };
