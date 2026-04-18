@@ -18,6 +18,73 @@ import {
 } from "../util.js";
 import type { WorkItem } from "../types.js";
 
+const DEFAULT_STALE_HEARTBEAT_MINUTES = 20;
+const ID_COL_WIDTH = 26;
+const PR_COL_WIDTH = 42;
+const DEFAULT_TERM_WIDTH = 120;
+
+const readStaleHeartbeatMinutes = (): number => {
+  if (!existsSync(CONFIG_JSON)) return DEFAULT_STALE_HEARTBEAT_MINUTES;
+  const cfg = parseJson<{ stale_heartbeat_minutes?: number }>(
+    readFileSync(CONFIG_JSON, "utf8"),
+    {},
+  );
+  const m = cfg.stale_heartbeat_minutes;
+  return typeof m === "number" && m > 0 ? m : DEFAULT_STALE_HEARTBEAT_MINUTES;
+};
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const visibleLen = (s: string) => s.replace(ANSI_RE, "").length;
+const padVisible = (s: string, width: number) =>
+  s + " ".repeat(Math.max(0, width - visibleLen(s)));
+const truncate = (s: string, max: number) =>
+  s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + "…";
+
+const formatHbAge = (minutes: number): string => {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+};
+
+const priorityBadge = (p: number): string => {
+  if (p <= 1) return chalk.red.bold(`${p}`);
+  if (p === 2) return chalk.yellow(`${p}`);
+  if (p === 3) return chalk.cyan(`${p}`);
+  return chalk.gray(`${p}`);
+};
+
+const statusColor = (status: string): string => {
+  switch (status) {
+    case "in-progress":
+      return chalk.green(status);
+    case "pr-open":
+      return chalk.cyan(status);
+    case "blocked":
+      return chalk.red(status);
+    case "queued":
+      return chalk.gray(status);
+    default:
+      return status;
+  }
+};
+
+const sessionStatusColor = (status: string): string => {
+  switch (status) {
+    case "running":
+      return chalk.green(status);
+    case "starting":
+    case "idle":
+      return chalk.cyan(status);
+    case "stale":
+      return chalk.red(status);
+    case "failed":
+      return chalk.red(status);
+    default:
+      return status;
+  }
+};
+
 // Threshold above which an in-progress cron tick is treated as potentially
 // wedged. Typical ticks complete in ~1–5m; doctor-invoked claude -p can push
 // it past 15m. Anything older than this likely means launchd lost the child
@@ -268,14 +335,198 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   return lines.join("\n") + "\n";
 };
 
-export const cmdFleet = (format: "md" | "json" = "md", writeStatus = false) => {
+type FleetTableOptions = {
+  termWidth?: number;
+  staleMinutes?: number;
+};
+
+export const renderFleetTable = (
+  f: FleetSummary,
+  opts: FleetTableOptions = {},
+): string => {
+  const termWidth =
+    opts.termWidth ?? process.stdout.columns ?? DEFAULT_TERM_WIDTH;
+  const staleMinutes = opts.staleMinutes ?? readStaleHeartbeatMinutes();
+  const lines: string[] = [];
+
+  lines.push(chalk.bold(`COS Fleet`) + chalk.gray(`  ${nowIso()}`));
+  lines.push(`Queued:          ${f.queued.length}`);
+  lines.push(`In progress:     ${f.in_progress.length}`);
+  lines.push(`PR open:         ${f.pr_open.length}`);
+  lines.push(`Blocked:         ${f.blocked.length}`);
+  lines.push(
+    `Active sessions: ${f.active_sessions.length} (last ${f.session_window_hours}h)`,
+  );
+  lines.push(
+    `Stale sessions:  ${f.stale_sessions.length} (last ${f.session_window_hours}h)`,
+  );
+  lines.push(`New signals:     ${f.new_signals_count}`);
+  lines.push(`New ideas:       ${f.new_ideas_count}`);
+  lines.push(`Unpushed notes:  ${f.recent_notifications.length}`);
+  if (f.current_tick) {
+    const ageMin = minutesSinceSqliteTs(f.current_tick.started_at);
+    const stale = ageMin >= STALE_TICK_MINUTES;
+    const staleHint = stale
+      ? chalk.red(
+          ` (looks stale — last completed ${f.last_tick_at ?? "never"})`,
+        )
+      : "";
+    lines.push(
+      `Cron tick:       in progress, started ${ageMin}m ago${staleHint}`,
+    );
+  } else {
+    lines.push(`Last cron tick:  ${f.last_tick_at ?? "never"}`);
+  }
+  lines.push("");
+
+  const allWIs: Array<EnrichedWorkItem & { _group: string }> = [
+    ...f.in_progress.map((wi) => ({ ...wi, _group: "in-progress" })),
+    ...f.pr_open.map((wi) => ({ ...wi, _group: "pr-open" })),
+    ...f.blocked.map((wi) => ({ ...wi, _group: "blocked" })),
+    ...f.queued.map((wi) => ({ ...wi, _group: "queued" })),
+  ];
+
+  if (allWIs.length) {
+    lines.push(chalk.bold(`WORK ITEMS (${allWIs.length})`));
+    const headerCols = [
+      padVisible("ID", ID_COL_WIDTH),
+      padVisible("P", 2),
+      padVisible("STATUS", 12),
+      padVisible("STEP", 14),
+      padVisible("HB", 6),
+      "TITLE",
+    ];
+    const fixedWidth = ID_COL_WIDTH + 2 + 12 + 14 + 6 + 5 * 2;
+    const titleWidth = Math.max(20, termWidth - fixedWidth);
+    lines.push(chalk.dim(headerCols.join("  ")));
+    for (const wi of allWIs) {
+      const id = truncate(displayWorkItemId(wi), ID_COL_WIDTH);
+      const stepText = truncate(wi.active_step?.step ?? "—", 14);
+      const stepCell =
+        wi._group === "in-progress" && wi.active_step?.step
+          ? chalk.green(stepText)
+          : stepText;
+      let hbCell = "—";
+      if (wi.active_step) {
+        const ageMin = minutesSinceSqliteTs(wi.active_step.heartbeat);
+        const label = formatHbAge(ageMin);
+        hbCell = ageMin >= staleMinutes ? chalk.red(label) : label;
+      }
+      lines.push(
+        [
+          padVisible(id, ID_COL_WIDTH),
+          padVisible(priorityBadge(wi.priority), 2),
+          padVisible(statusColor(wi._group), 12),
+          padVisible(stepCell, 14),
+          padVisible(hbCell, 6),
+          truncate(wi.title, titleWidth),
+        ].join("  "),
+      );
+    }
+    lines.push("");
+  }
+
+  if (f.pr_open.length) {
+    lines.push(chalk.bold(`PRS AWAITING REVIEW (${f.pr_open.length})`));
+    const headerCols = [
+      padVisible("WI", ID_COL_WIDTH),
+      padVisible("PR", PR_COL_WIDTH),
+      padVisible("P", 2),
+      "TITLE",
+    ];
+    const fixedWidth = ID_COL_WIDTH + PR_COL_WIDTH + 2 + 3 * 2;
+    const titleWidth = Math.max(20, termWidth - fixedWidth);
+    lines.push(chalk.dim(headerCols.join("  ")));
+    for (const wi of f.pr_open) {
+      const prRaw = wi.pr_urls[0] ?? "—";
+      const prShort = prRaw
+        .replace(/^https?:\/\/github\.com\//, "")
+        .replace(/\/pull\//, "#");
+      lines.push(
+        [
+          padVisible(
+            truncate(displayWorkItemId(wi), ID_COL_WIDTH),
+            ID_COL_WIDTH,
+          ),
+          padVisible(truncate(prShort, PR_COL_WIDTH), PR_COL_WIDTH),
+          padVisible(priorityBadge(wi.priority), 2),
+          truncate(wi.title, titleWidth),
+        ].join("  "),
+      );
+      for (const extra of wi.pr_urls.slice(1)) {
+        const extraShort = extra
+          .replace(/^https?:\/\/github\.com\//, "")
+          .replace(/\/pull\//, "#");
+        lines.push(`  ${chalk.gray(extraShort)}`);
+      }
+    }
+    lines.push("");
+  }
+
+  const allSessions = [...f.active_sessions, ...f.stale_sessions];
+  if (allSessions.length) {
+    const activeCount = f.active_sessions.length;
+    lines.push(
+      chalk.bold(
+        `SESSIONS (last ${f.session_window_hours}h, active=${activeCount})`,
+      ),
+    );
+    const headerCols = [
+      padVisible("SESSION", ID_COL_WIDTH),
+      padVisible("WI", ID_COL_WIDTH),
+      padVisible("KIND", 7),
+      padVisible("STEP", 14),
+      padVisible("HB", 6),
+      "STATUS",
+    ];
+    lines.push(chalk.dim(headerCols.join("  ")));
+    const lookupWi = (id: string | null) => (id ? workItems.get(id) : null);
+    for (const s of allSessions) {
+      const wi = lookupWi(s.work_item_id);
+      const wiLabel = wi ? displayWorkItemId(wi) : (s.work_item_id ?? "—");
+      const ageMin = minutesSinceSqliteTs(s.last_heartbeat);
+      const hbLabel = formatHbAge(ageMin);
+      const hbCell = ageMin >= staleMinutes ? chalk.red(hbLabel) : hbLabel;
+      const stepText = truncate(s.current_step ?? "—", 14);
+      const stepCell =
+        s.status === "running" && s.current_step
+          ? chalk.green(stepText)
+          : stepText;
+      lines.push(
+        [
+          padVisible(truncate(s.id, ID_COL_WIDTH), ID_COL_WIDTH),
+          padVisible(truncate(wiLabel, ID_COL_WIDTH), ID_COL_WIDTH),
+          padVisible(truncate(s.kind, 7), 7),
+          padVisible(stepCell, 14),
+          padVisible(hbCell, 6),
+          sessionStatusColor(s.status),
+        ].join("  "),
+      );
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+};
+
+export const cmdFleet = (
+  format: "table" | "md" | "json" = "table",
+  writeStatus = false,
+) => {
   const f = collectFleet();
   if (format === "json") {
     console.log(JSON.stringify(f, null, 2));
-  } else {
+  } else if (format === "md") {
     const md = renderFleetMarkdown(f);
     console.log(md);
     if (writeStatus) {
+      writeFileSync(STATUS_MD, md);
+      console.error(chalk.gray(`wrote ${STATUS_MD}`));
+    }
+  } else {
+    console.log(renderFleetTable(f));
+    if (writeStatus) {
+      const md = renderFleetMarkdown(f);
       writeFileSync(STATUS_MD, md);
       console.error(chalk.gray(`wrote ${STATUS_MD}`));
     }
