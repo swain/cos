@@ -89,10 +89,70 @@ Concretely, when _and only when_ this work item's repo is `cos` (i.e. the worktr
      Then `cos worker-done <session-id> --pr-url <pr-url>` and exit. Do not attempt to merge.
 
 7. **Self-merge.** If steps 1–6 all pass, merge:
+
    ```bash
    gh pr merge <pr-number> --repo swain/cos --squash --delete-branch
    ```
-   Then `cos worker-done <session-id> --pr-url <pr-url>` and exit.
+
+   Then continue to step 8 — **do not exit yet.** The merge is not "deployed" until step 8 syncs the shared checkout and rebuilds the CLI.
+
+8. **Post-merge sync + redeploy.** The `cos` CLI runs from `~/.claude/cos/cli/dist/index.js`, which is symlinked into `~/Repos/cos/cli/`. Until that checkout advances to the new `origin/main` and is rebuilt, the merged change is not live. Long-running launchd services (e.g. `com.$(whoami).cos.inbox`) also keep running old code until kickstarted. This step closes both gaps in the same worker session.
+
+   Run **after** the `gh pr merge` in step 7 has succeeded — never before, so the "only merge on green" invariant is preserved.
+
+   ```bash
+   SYNC_DIR="$HOME/Repos/cos"
+   BUILD_FAILED=0
+   (
+     set -e
+     cd "$SYNC_DIR"
+     git fetch origin main
+     PREV=$(git rev-parse HEAD)
+     git reset --hard origin/main
+     cd cli
+     [[ -d node_modules ]] || npm install --silent
+     npm run build --silent
+     # export PREV for the kickstart check below
+     echo "$PREV" > /tmp/cos-post-merge-prev.$$
+   ) || BUILD_FAILED=1
+
+   if [[ "$BUILD_FAILED" == "1" ]]; then
+     cos notify --urgency urgent \
+       --subject "cos post-merge rebuild failed" \
+       --body "<pr-url> — merge landed on origin/main but rebuilding $SYNC_DIR/cli failed. Deployed dist is stale. Investigate: cd $SYNC_DIR/cli && npm run build"
+     # The PR merged successfully — record that outcome on the session, then
+     # exit non-zero so the failure is visible in the worker's exit status.
+     cos worker-done <session-id> --pr-url <pr-url>
+     exit 1
+   fi
+
+   PREV=$(cat /tmp/cos-post-merge-prev.$$ 2>/dev/null || echo "")
+   rm -f /tmp/cos-post-merge-prev.$$
+   CHANGED=""
+   if [[ -n "$PREV" ]]; then
+     CHANGED=$(git -C "$SYNC_DIR" diff --name-only "$PREV" HEAD 2>/dev/null || true)
+   fi
+
+   # Restart long-running launchd services whose code the merged diff touched.
+   # The cron worker is spawned fresh each tick, so rebuild alone covers it.
+   if grep -qE '(^|/)cli/src/commands/inbox-serve\.ts$|(^|/)cli/src/inbox/' <<< "$CHANGED"; then
+     launchctl kickstart -k "gui/$UID/com.$(whoami).cos.inbox" || true
+   fi
+   ```
+
+   Notes:
+   - **`git reset --hard origin/main`, not `git pull`.** `~/Repos/cos` is deploy-only — any human edits happen in dedicated worktrees (see `~/.claude/cos/arch.md` → "Worktree discipline"). Local changes on the main checkout are by design discarded.
+   - **Idempotent.** Concurrent workers racing through step 8 converge on the same `origin/main` commit with the same rebuilt dist. A second `git reset` on an already-updated main is a no-op.
+   - **Rebuild failure is non-fatal to the merge.** The PR stays merged. The worker raises an urgent notification so the user can intervene, still calls `cos worker-done --pr-url` (the PR did open + merge), and exits with status 1 so the failure is visible.
+   - **Restart scope is narrow.** Kickstart the inbox launchd job only when the merged diff touches `cli/src/inbox/` or `cli/src/commands/inbox-serve.ts`. Future long-running launchd jobs get their own case in this step.
+
+   On success, finish:
+
+   ```bash
+   ~/.claude/cos/bin/cos worker-done <session-id> --pr-url <pr-url>
+   ```
+
+   and exit.
 
 **Never self-merge on `thegoodparty/*` repos or any repo other than `cos`.** On any non-cos repo, rule 5 above stands: open the PR and stop.
 
