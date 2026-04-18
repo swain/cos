@@ -74,15 +74,17 @@ const migrate = (db: Database.Database) => {
   }
   if (!hasColumn(db, "work_items", "parent_id")) {
     db.exec(`ALTER TABLE work_items ADD COLUMN parent_id TEXT`);
-    db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id)`,
-    );
   }
   if (!hasColumn(db, "work_items", "needs_planning")) {
     db.exec(
       `ALTER TABLE work_items ADD COLUMN needs_planning INTEGER NOT NULL DEFAULT 0`,
     );
   }
+  // Index runs after ALTER so it works on both fresh (schema.sql created the
+  // column) and migrated DBs (ALTER just created it).
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id)`,
+  );
 };
 
 const rowToWorkItem = (r: any): WorkItem => ({
