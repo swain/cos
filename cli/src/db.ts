@@ -24,12 +24,15 @@ let _db: Database.Database | null = null;
 
 export const getDb = (): Database.Database => {
   if (_db) return _db;
-  mkdirSync(COS_DIR, { recursive: true });
-  mkdirSync(LOGS_DIR, { recursive: true });
-  mkdirSync(WORKLOGS_DIR, { recursive: true });
-  mkdirSync(MEETINGS_DIR, { recursive: true });
-  mkdirSync(PROMPTS_DIR, { recursive: true });
-  _db = new Database(DB_PATH);
+  const path = process.env.COS_DB_PATH || DB_PATH;
+  if (path === DB_PATH) {
+    mkdirSync(COS_DIR, { recursive: true });
+    mkdirSync(LOGS_DIR, { recursive: true });
+    mkdirSync(WORKLOGS_DIR, { recursive: true });
+    mkdirSync(MEETINGS_DIR, { recursive: true });
+    mkdirSync(PROMPTS_DIR, { recursive: true });
+  }
+  _db = new Database(path);
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
 
