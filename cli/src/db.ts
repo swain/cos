@@ -43,7 +43,28 @@ export const getDb = (): Database.Database => {
   if (!schemaPath)
     throw new Error(`schema.sql not found (tried: ${candidates.join(", ")})`);
   _db.exec(readFileSync(schemaPath, "utf8"));
+  migrate(_db);
   return _db;
+};
+
+const hasColumn = (
+  db: Database.Database,
+  table: string,
+  col: string,
+): boolean => {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+  return rows.some((r) => r.name === col);
+};
+
+const migrate = (db: Database.Database) => {
+  if (!hasColumn(db, "work_items", "needs_approval")) {
+    db.exec(
+      `ALTER TABLE work_items ADD COLUMN needs_approval INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+  if (!hasColumn(db, "sessions", "acked_at")) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN acked_at TEXT`);
+  }
 };
 
 const rowToWorkItem = (r: any): WorkItem => ({
@@ -60,6 +81,7 @@ const rowToWorkItem = (r: any): WorkItem => ({
   pr_urls: parseJson<string[]>(r.pr_urls, []),
   worklog_path: r.worklog_path,
   worktree_paths: parseJson<Record<string, string>>(r.worktree_paths, {}),
+  needs_approval: !!r.needs_approval,
   created_at: r.created_at,
   updated_at: r.updated_at,
   completed_at: r.completed_at,
@@ -98,6 +120,7 @@ const rowToSession = (r: any): Session => ({
   last_heartbeat: r.last_heartbeat,
   started_at: r.started_at,
   ended_at: r.ended_at,
+  acked_at: r.acked_at,
   notes: r.notes,
 });
 
@@ -116,14 +139,15 @@ export const workItems = {
   insert(wi: Omit<WorkItem, "created_at" | "updated_at" | "completed_at">) {
     const db = getDb();
     db.prepare(
-      `INSERT INTO work_items (id, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths)
-       VALUES (@id, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths)`,
+      `INSERT INTO work_items (id, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths, needs_approval)
+       VALUES (@id, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths, @needs_approval)`,
     ).run({
       ...wi,
       repos: JSON.stringify(wi.repos),
       depends_on: JSON.stringify(wi.depends_on),
       pr_urls: JSON.stringify(wi.pr_urls),
       worktree_paths: JSON.stringify(wi.worktree_paths),
+      needs_approval: wi.needs_approval ? 1 : 0,
     });
   },
   get(id: string): WorkItem | null {
@@ -154,6 +178,7 @@ export const workItems = {
       depends_on: JSON.stringify,
       pr_urls: JSON.stringify,
       worktree_paths: JSON.stringify,
+      needs_approval: (v: boolean) => (v ? 1 : 0),
     };
     for (const [k, v] of Object.entries(patch)) {
       if (k === "id" || v === undefined) continue;
@@ -258,7 +283,9 @@ export const signals = {
 };
 
 export const sessions = {
-  insert(s: Omit<Session, "started_at" | "last_heartbeat" | "ended_at">) {
+  insert(
+    s: Omit<Session, "started_at" | "last_heartbeat" | "ended_at" | "acked_at">,
+  ) {
     getDb()
       .prepare(
         `INSERT INTO sessions (id, work_item_id, tmux_window, kind, status, current_step, notes)

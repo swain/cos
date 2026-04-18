@@ -45,6 +45,7 @@ export const cmdIdeaPromote = (
     pr_urls: [],
     worklog_path: null,
     worktree_paths: {},
+    needs_approval: false,
   });
   ideas.update(ideaId, { status: "promoted", promoted_to: wiId });
   console.log(chalk.green("promoted"), ideaId, "→", wiId);

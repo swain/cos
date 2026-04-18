@@ -25,6 +25,7 @@ export const WorkItemSchema = z.object({
   pr_urls: z.array(z.string()),
   worklog_path: z.string().nullable(),
   worktree_paths: z.record(z.string(), z.string()),
+  needs_approval: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
   completed_at: z.string().nullable(),
@@ -102,6 +103,7 @@ export const SessionSchema = z.object({
   last_heartbeat: z.string(),
   started_at: z.string(),
   ended_at: z.string().nullable(),
+  acked_at: z.string().nullable(),
   notes: z.string().nullable(),
 });
 export type Session = z.infer<typeof SessionSchema>;
