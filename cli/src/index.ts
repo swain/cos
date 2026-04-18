@@ -18,6 +18,7 @@ import {
   cmdSignalAdd,
   cmdCollectGithub,
   cmdCollectCalendar,
+  cmdCollectClickup,
 } from "./commands/signals.js";
 import {
   cmdIdeasList,
@@ -218,6 +219,11 @@ program
   .action((opts) =>
     cmdCollectCalendar({ timeoutMs: parseInt(opts.timeoutMs, 10) }),
   );
+
+program
+  .command("collect-clickup")
+  .description("Run the ClickUp signal collector")
+  .action(() => cmdCollectClickup());
 
 program
   .command("ideas")

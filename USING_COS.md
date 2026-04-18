@@ -196,6 +196,37 @@ For operational stuff (enqueue, dispatch, status), don't need `/cos`. Just talk.
 
 - Anything COS suppressed or decided can wait.
 
+## Signal collectors
+
+Collectors run at the top of every `cos tick`. Each one is a function in `cli/src/collectors/*.ts` that returns `CollectedSignal[]`. The tick inserts them through `signals.insert`, which dedupes by the unique index on `(source, kind, external_id)` — so re-emitting the same event across ticks is a no-op.
+
+### GitHub (`collectors/github.ts`)
+
+Uses the `gh` CLI. Reads `~/.claude/cos/watched-repos.json` to scope the search. Emits `pr-needs-my-review`, `pr-ci-failed`, `pr-comments-on-mine`, `pr-merge-conflict`.
+
+Run it in isolation: `cos collect-github`.
+
+### ClickUp (`collectors/clickup.ts`)
+
+Uses the ClickUp REST API v2. Emits:
+
+- `clickup-task-assigned` — a task assigned to you was newly created (`external_id=clickup-task:{id}:created`) or entered a new status (`external_id=clickup-task:{id}:status:{status}`).
+- `clickup-mention` — a comment mentioning you on a task you're watching (`external_id=clickup-comment:{id}`).
+- `clickup-deadline` — a task assigned to you with `due_date` within the next 24h (`external_id=clickup-task:{id}:due:{ms}`).
+
+Configure:
+
+```bash
+export CLICKUP_API_TOKEN=pk_xxxxxx           # required; from ClickUp Settings → Apps → Generate
+export CLICKUP_TEAM_ID=12345678              # optional; defaults to your first workspace
+```
+
+The collector stores the last-tick ISO timestamp in the `kv` table under `clickup.last_tick_at` and queries only tasks updated since that point (24h lookback on first run).
+
+If `CLICKUP_API_TOKEN` is unset, the collector returns zero signals and the tick continues normally.
+
+Run it in isolation: `cos collect-clickup`.
+
 ## How to extend COS
 
 **Everything post-MVP lives in the queue.** You extend COS by enqueuing a work item that describes the extension.
@@ -364,6 +395,7 @@ cos session-mark-stale <sess-id>
 cos signals [--status <s>] [--source <s>]
 cos signal-triage <sig-id> <action> ...   # action: suppress|idea|work-item|notify
 cos collect-github                # run github collector only
+cos collect-clickup               # run clickup collector only
 cos ideas [--status <s>]
 cos idea --title ... --description ...
 cos idea-promote <idea-id> --priority N --repos '[...]' --acceptance "..."
