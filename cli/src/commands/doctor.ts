@@ -8,14 +8,22 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   workItems,
   sessions as sessionsApi,
   cosLog,
   notifications,
+  signals,
 } from "../db.js";
-import { CONFIG_JSON, HOME, LOGS_DIR, nowIso, parseJson } from "../util.js";
+import {
+  COS_DIR,
+  CONFIG_JSON,
+  HOME,
+  LOGS_DIR,
+  nowIso,
+  parseJson,
+} from "../util.js";
 import type { Session } from "../types.js";
 
 const TMUX_SESSION = "cos-workers";
@@ -23,6 +31,7 @@ const DEFAULT_STALE_MINUTES = 20;
 const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
 const DEFAULT_SESSION_ARCHIVE_DAYS = 7;
+const LONG_STALE_KILL_MINUTES = 120;
 
 const COS_REPO_PATH = join(HOME, "Repos/cos");
 const COS_SHAREABLE_DIRS = ["prompts", "cli/src", "bin", "launchd"];
@@ -294,7 +303,88 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
   return f;
 };
 
+const removeWorktree = (
+  repoPath: string,
+  wtPath: string,
+): { ok: boolean; error?: string } => {
+  try {
+    execFileSync(
+      "git",
+      ["-C", repoPath, "worktree", "remove", "--force", wtPath],
+      {
+        stdio: "pipe",
+      },
+    );
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: String(e.message ?? e).slice(0, 200) };
+  }
+};
+
+// Given a worktree path like ~/Repos/cos-worktrees/wi-xyz-slug, derive the repo
+// dir. Pattern is `<reposBase>/<short>-worktrees/<wt>`, so the repo lives at
+// `<reposBase>/<short>` (cos) or `<reposBase>/thegoodparty/<short>` (product repos).
+const repoDirForWorktree = (wtPath: string): string | null => {
+  const parent = wtPath.replace(/\/[^/]+$/, "");
+  const match = parent.match(/^(.*)\/([^/]+)-worktrees$/);
+  if (!match) return null;
+  const [, reposBase, short] = match;
+  const candidates = [
+    join(reposBase, short),
+    join(reposBase, "thegoodparty", short),
+  ];
+  for (const c of candidates) if (existsSync(join(c, ".git"))) return c;
+  return null;
+};
+
+const cleanupWorkItemWorktrees = (wi: {
+  id: string;
+  worktree_paths: Record<string, string>;
+}): { removed: string[]; failed: string[] } => {
+  const removed: string[] = [];
+  const failed: string[] = [];
+  for (const wtPath of Object.values(wi.worktree_paths)) {
+    if (!existsSync(wtPath)) {
+      removed.push(wtPath);
+      continue;
+    }
+    const repoDir = repoDirForWorktree(wtPath);
+    if (!repoDir) {
+      failed.push(wtPath);
+      continue;
+    }
+    const res = removeWorktree(repoDir, wtPath);
+    if (res.ok) removed.push(wtPath);
+    else failed.push(wtPath);
+  }
+  return { removed, failed };
+};
+
+const cancelWorkItemSessions = (workItemId: string): string[] => {
+  const killed: string[] = [];
+  const active = [
+    ...sessionsApi.list({ status: "running" }),
+    ...sessionsApi.list({ status: "starting" }),
+    ...sessionsApi.list({ status: "idle" }),
+  ].filter((s) => s.work_item_id === workItemId);
+  for (const s of active) {
+    const window = expectedTmuxWindow(s);
+    if (window) killTmuxWindow(window);
+    sessionsApi.update(s.id, {
+      status: "killed",
+      current_step: "killed",
+      notes: `${s.notes ? s.notes + "; " : ""}pr merged — session cancelled`,
+      ended_at: nowIso(),
+    });
+    killed.push(s.id);
+  }
+  return killed;
+};
+
 // Invariant 4: pr-open work items whose PR is actually merged/closed on GH.
+// On merge: also cleans up the worktree and cancels any still-active session
+// on the work item. On abandonment (closed without merge): reconciles status
+// but leaves the worktree alone so the user can inspect.
 const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
   const f = emptyFinding("pr-status-drift");
   const items = workItems.list({ status: "pr-open" });
@@ -327,7 +417,20 @@ const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
       const patch: Record<string, unknown> = { status: newStatus };
       if (newStatus === "merged") patch.completed_at = mergedAt ?? nowIso();
       workItems.update(wi.id, patch as any);
-      f.fixed.push({ id: wi.id, action: `reconciled to ${newStatus}` });
+      const fix: DoctorFix = {
+        id: wi.id,
+        action: `reconciled to ${newStatus}`,
+      };
+      if (newStatus === "merged") {
+        const cleanup = cleanupWorkItemWorktrees(wi);
+        const cancelled = cancelWorkItemSessions(wi.id);
+        fix.details = {
+          worktrees_removed: cleanup.removed,
+          worktrees_failed: cleanup.failed,
+          sessions_cancelled: cancelled,
+        };
+      }
+      f.fixed.push(fix);
     }
   }
   return f;
@@ -741,6 +844,150 @@ export const checkInvariant11PlannedParentRollup = (
   return f;
 };
 
+// Invariant 12: sessions whose last heartbeat is older than 2h get their tmux
+// window force-killed. Covers the case where invariant 2 already marked the
+// session stale but the tmux window is still consuming resources (claude stuck
+// in a loop, network wedge, etc). Also covers running/starting/idle sessions
+// that somehow blew past the 20m stale window without the session being
+// updated — rare, but we don't want them sitting forever.
+const checkInvariant12LongStaleTmuxKill = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("long-stale-tmux-kill");
+  const candidates = [
+    ...sessionsApi.list({ status: "running" }),
+    ...sessionsApi.list({ status: "starting" }),
+    ...sessionsApi.list({ status: "idle" }),
+    ...sessionsApi.list({ status: "stale" }),
+  ].filter((s) => s.kind === "worker");
+  if (!candidates.length) return f;
+  const windows = listTmuxWindows();
+  for (const s of candidates) {
+    const age = minutesSince(s.last_heartbeat);
+    if (age <= LONG_STALE_KILL_MINUTES) continue;
+    const expected = expectedTmuxWindow(s);
+    const windowPresent =
+      expected !== null && windows !== null && windows.includes(expected);
+    // Nothing to kill and the session is already stale → no-op.
+    if (!windowPresent && s.status === "stale") continue;
+    f.ok = false;
+    f.entries.push({
+      id: s.id,
+      reason: `session age ${age.toFixed(0)}m exceeds kill threshold (${LONG_STALE_KILL_MINUTES}m)`,
+      details: {
+        status: s.status,
+        work_item_id: s.work_item_id,
+        last_heartbeat: s.last_heartbeat,
+        tmux_window: expected,
+        tmux_window_present: windowPresent,
+      },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      const killed =
+        windowPresent && expected ? killTmuxWindow(expected) : false;
+      sessionsApi.update(s.id, {
+        status: "killed",
+        current_step: "killed",
+        notes: `${s.notes ? s.notes + "; " : ""}auto-killed at ${age.toFixed(0)}m (>${LONG_STALE_KILL_MINUTES}m)`,
+        ended_at: nowIso(),
+      });
+      f.fixed.push({
+        id: s.id,
+        action: killed
+          ? "tmux window killed, session marked killed"
+          : "session marked killed (tmux window already gone)",
+      });
+    }
+  }
+  return f;
+};
+
+// Invariant 13: reviewer comments on an open PR for a pr-open work item should
+// auto-spawn a fix-comments worker. The new worker reuses the same work item
+// and worktree but a fresh session, with a one-off dispatch note telling it to
+// address the reviewer comments and exit. Only fires when (a) the signal is
+// still status=new, (b) a pr-open work item's pr_urls includes the PR URL,
+// and (c) no worker session is already active on that work item.
+const checkInvariant13PrCommentRedispatch = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("pr-comment-redispatch");
+  const newSignals = signals
+    .list({ status: "new" })
+    .filter((s) => s.kind === "pr-comments-on-mine");
+  if (!newSignals.length) return f;
+  const prOpenItems = workItems.list({ status: "pr-open" });
+  if (!prOpenItems.length) return f;
+  const spawnScript = join(COS_DIR, "bin/spawn-worker");
+  const activeBySig = (workItemId: string): Session | null => {
+    const active = [
+      ...sessionsApi.list({ status: "running" }),
+      ...sessionsApi.list({ status: "starting" }),
+    ].filter((s) => s.work_item_id === workItemId);
+    return active[0] ?? null;
+  };
+  for (const sig of newSignals) {
+    const prUrl =
+      (sig.payload?.url as string | undefined) ??
+      (sig.external_id ? sig.external_id.replace(/#comments$/, "") : null);
+    if (!prUrl) continue;
+    const wi = prOpenItems.find((w) => w.pr_urls.includes(prUrl));
+    if (!wi) continue;
+    const existing = activeBySig(wi.id);
+    if (existing) {
+      // Don't double-dispatch — leave the signal for claude triage to notify
+      // the user, consistent with the cron prompt's fallback behaviour.
+      continue;
+    }
+    f.ok = false;
+    f.entries.push({
+      id: sig.id,
+      reason: `reviewer comments on ${prUrl} → auto-dispatch fix worker for ${wi.id}`,
+      details: {
+        pr_url: prUrl,
+        work_item_id: wi.id,
+        comment_count: sig.payload?.comment_count ?? null,
+        review_count: sig.payload?.review_count ?? null,
+      },
+    });
+    if (!opts.autoFix || opts.dryRun) continue;
+    if (!existsSync(spawnScript)) {
+      f.entries.push({
+        id: sig.id,
+        reason: `spawn-worker not found at ${spawnScript} — cannot re-dispatch`,
+      });
+      continue;
+    }
+    const note = [
+      `A reviewer left comments on ${prUrl}.`,
+      "Address the reviewer comments on that PR, push fixups to the same branch, then exit.",
+      "Do not open a new PR — this work item already has one open. Do not expand scope beyond the review feedback.",
+    ].join(" ");
+    const env = { ...process.env, COS_SESSION_NOTE: note };
+    const res = spawnSync("bash", [spawnScript, wi.id], {
+      env,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    if (res.status !== 0) {
+      f.entries.push({
+        id: sig.id,
+        reason: `spawn-worker exited ${res.status}`,
+        details: { stderr: (res.stderr ?? "").toString().slice(0, 400) },
+      });
+      continue;
+    }
+    workItems.update(wi.id, { status: "in-progress" });
+    signals.update(sig.id, { status: "triaged", triaged_at: nowIso() });
+    f.fixed.push({
+      id: sig.id,
+      action: `dispatched fix-comments worker for ${wi.id}`,
+      details: { pr_url: prUrl, work_item_id: wi.id },
+    });
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -754,6 +1001,8 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant9StrandedWorkItem(opts),
     checkInvariant10OldSessionArchive(opts),
     checkInvariant11PlannedParentRollup(opts),
+    checkInvariant12LongStaleTmuxKill(opts),
+    checkInvariant13PrCommentRedispatch(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);

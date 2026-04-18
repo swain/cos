@@ -12,7 +12,11 @@ TMUX_SESSION="cos-workers"
 [[ -x "$COS_BIN" ]] || { echo "cos CLI not found at $COS_BIN" >&2; exit 2; }
 [[ -x "$CLAUDE_BIN" ]] || { echo "claude not found at $CLAUDE_BIN" >&2; exit 2; }
 
-SESSION_ID="$("$COS_BIN" session-new --work-item "$WI_ID" --kind worker | tail -1)"
+SESSION_NEW_ARGS=(session-new --work-item "$WI_ID" --kind worker)
+if [[ -n "${COS_SESSION_NOTE:-}" ]]; then
+  SESSION_NEW_ARGS+=(--notes "$COS_SESSION_NOTE")
+fi
+SESSION_ID="$("$COS_BIN" "${SESSION_NEW_ARGS[@]}" | tail -1)"
 [[ -n "$SESSION_ID" ]] || { echo "session-new failed" >&2; exit 1; }
 echo "[spawn-worker] session: $SESSION_ID"
 

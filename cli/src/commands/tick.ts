@@ -77,26 +77,10 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
   let rc: number | null = null;
 
   try {
-    // 0) Doctor — run system invariants and auto-fix before anything else.
-    //    Runs even in --dry-run mode for the tick: the tick's dry-run only
-    //    skips invoking claude, but doctor's own dry-run is independent.
-    let doctorReport: DoctorReport | null = null;
-    try {
-      doctorReport = runDoctor({
-        autoFix: !opts.dryRun,
-        dryRun: !!opts.dryRun,
-        format: "json",
-      });
-      console.error(
-        chalk.gray(
-          `[tick] doctor: ${doctorReport.summary.issues} issue(s), fixed=${doctorReport.summary.fixed}, notified=${doctorReport.summary.notified}`,
-        ),
-      );
-    } catch (e: any) {
-      console.error(chalk.yellow(`[tick] doctor error: ${e.message}`));
-    }
-
-    // 1) Collect GitHub signals
+    // 0) Collect GitHub signals. Runs before doctor so invariant 13
+    //    (pr-comment re-dispatch) can see freshly-collected signals this
+    //    same tick, otherwise claude's LLM triage would mark them triaged
+    //    before doctor ever gets a chance.
     try {
       const collected = await collectGithubSignals();
       let inserted = 0;
@@ -124,7 +108,7 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       );
     }
 
-    // 1b) Collect Grafana signals (firing alerts; dedup is via external_id).
+    // 0b) Collect Grafana signals (firing alerts; dedup is via external_id).
     try {
       const collected = await collectGrafanaSignals();
       let inserted = 0;
@@ -152,7 +136,7 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       );
     }
 
-    // 1c) Collect calendar + meeting-prep — spawns claude with MCP tools.
+    // 0c) Collect calendar + meeting-prep — spawns claude with MCP tools.
     //     Writes prep files to ~/.claude/cos/meetings/, emits
     //     meeting-prep-ready signals, and records urgent notifications.
     //     Skipped in --dry-run because it is itself a claude invocation.
@@ -175,7 +159,7 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       }
     }
 
-    // 1d) Collect ClickUp signals
+    // 0d) Collect ClickUp signals
     try {
       const collected = await collectClickupSignals();
       let inserted = 0;
@@ -203,7 +187,7 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       );
     }
 
-    // 1e) Collect Slack signals (DMs + @-mentions via MCP). Best-effort:
+    // 0e) Collect Slack signals (DMs + @-mentions via MCP). Best-effort:
     //     slack requires spawning an inner claude subprocess for MCP access,
     //     so any failure here should not abort the tick.
     try {
@@ -231,6 +215,25 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
       console.error(
         chalk.yellow(`[tick] slack collection error: ${e.message}`),
       );
+    }
+
+    // 1) Doctor — run system invariants and auto-fix.
+    //    Runs even in --dry-run mode for the tick: the tick's dry-run only
+    //    skips invoking claude, but doctor's own dry-run is independent.
+    let doctorReport: DoctorReport | null = null;
+    try {
+      doctorReport = runDoctor({
+        autoFix: !opts.dryRun,
+        dryRun: !!opts.dryRun,
+        format: "json",
+      });
+      console.error(
+        chalk.gray(
+          `[tick] doctor: ${doctorReport.summary.issues} issue(s), fixed=${doctorReport.summary.fixed}, notified=${doctorReport.summary.notified}`,
+        ),
+      );
+    } catch (e: any) {
+      console.error(chalk.yellow(`[tick] doctor error: ${e.message}`));
     }
 
     // 2) Prepare state snapshot for the claude invocation

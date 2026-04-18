@@ -243,21 +243,28 @@ export const cmdWorkerPrompt = (workItemId: string, sessionId: string) => {
       .map(([r, p]) => `- ${r}: ${p}`)
       .join("\n") || "(none configured)";
   const template = workerPromptTemplate();
-  const filled = template
-    .replaceAll("{{WI_ID}}", wi.id)
-    .replaceAll("{{SESSION_ID}}", sessionId)
-    .replaceAll("{{TITLE}}", wi.title)
-    .replaceAll("{{DESCRIPTION}}", wi.description)
-    .replaceAll("{{ACCEPTANCE}}", wi.acceptance_criteria)
-    .replaceAll("{{WORKTREES}}", worktrees)
-    .replaceAll("{{WORKLOG_PATH}}", worklogPath)
-    .replaceAll("{{WI_JSON}}", JSON.stringify(wi, null, 2));
+  const session = sessions.get(sessionId);
+  const sessionNote = session?.notes ?? "";
+  const dispatchInstructions = sessionNote.trim()
+    ? `\n\n## Dispatch instructions (this session only)\n\n${sessionNote.trim()}\n`
+    : "";
+  const filled =
+    template
+      .replaceAll("{{WI_ID}}", wi.id)
+      .replaceAll("{{SESSION_ID}}", sessionId)
+      .replaceAll("{{TITLE}}", wi.title)
+      .replaceAll("{{DESCRIPTION}}", wi.description)
+      .replaceAll("{{ACCEPTANCE}}", wi.acceptance_criteria)
+      .replaceAll("{{WORKTREES}}", worktrees)
+      .replaceAll("{{WORKLOG_PATH}}", worklogPath)
+      .replaceAll("{{WI_JSON}}", JSON.stringify(wi, null, 2)) +
+    dispatchInstructions;
   process.stdout.write(filled);
 };
 
 export const cmdDispatch = (
   workItemId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; note?: string } = {},
 ) => {
   const wi = workItems.get(workItemId);
   if (!wi) {
@@ -339,8 +346,11 @@ export const cmdDispatch = (
     console.error(chalk.red(`spawn-worker script not found: ${spawnScript}`));
     process.exit(2);
   }
+  const env = { ...process.env };
+  if (opts.note) env.COS_SESSION_NOTE = opts.note;
   const res = spawnSync("bash", [spawnScript, workItemId], {
     stdio: "inherit",
+    env,
   });
   if (res.status !== 0) {
     console.error(chalk.red(`spawn-worker exited with ${res.status}`));

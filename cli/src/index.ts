@@ -157,7 +157,13 @@ program
   .command("dispatch <workItemId>")
   .description("Spawn a worker on a work item")
   .option("--force", "skip auto-dispatch guards", false)
-  .action((id, opts) => cmdDispatch(id, { force: opts.force }));
+  .option(
+    "--note <note>",
+    "one-off dispatch instructions appended to the worker prompt",
+  )
+  .action((id, opts) =>
+    cmdDispatch(id, { force: opts.force, note: opts.note }),
+  );
 
 program
   .command("plan <workItemId>")
