@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# COS inbox HTTP server wrapper — launched by launchd, runs continuously.
+
+set -o pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
+
+# Pin to the user's nvm default (same Node their interactive shell uses).
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  DEFAULT_ALIAS=""
+  if [[ -f "$HOME/.nvm/alias/default" ]]; then
+    DEFAULT_ALIAS=$(cat "$HOME/.nvm/alias/default")
+  fi
+  TARGET_NODE_DIR=""
+  if [[ -n "$DEFAULT_ALIAS" ]]; then
+    if [[ "$DEFAULT_ALIAS" =~ ^[0-9]+$ ]]; then
+      TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | grep "^v${DEFAULT_ALIAS}\." | sort -V | tail -1)
+    elif [[ "$DEFAULT_ALIAS" == v* ]]; then
+      TARGET_NODE_DIR="$DEFAULT_ALIAS"
+    else
+      TARGET_NODE_DIR="v$DEFAULT_ALIAS"
+    fi
+  fi
+  if [[ -z "$TARGET_NODE_DIR" || ! -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+  fi
+  if [[ -n "$TARGET_NODE_DIR" && -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    export PATH="$HOME/.nvm/versions/node/$TARGET_NODE_DIR/bin:$PATH"
+  fi
+fi
+
+mkdir -p "$HOME/.claude/cos/logs"
+exec cos inbox-serve

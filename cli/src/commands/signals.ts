@@ -83,6 +83,7 @@ export const cmdSignalTriage = (
       pr_urls: [],
       worklog_path: null,
       worktree_paths: {},
+      needs_approval: false,
     });
     signals.update(signalId, {
       status: "converted-to-work-item",

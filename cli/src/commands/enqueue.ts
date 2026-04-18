@@ -29,6 +29,7 @@ export const cmdEnqueue = (args: EnqueueArgs): string => {
     pr_urls: [],
     worklog_path: null,
     worktree_paths: {},
+    needs_approval: false,
   });
   console.log(
     chalk.green("enqueued"),

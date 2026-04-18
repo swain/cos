@@ -28,6 +28,7 @@ import {
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
 import { cmdInbox } from "./commands/inbox.js";
+import { cmdInboxServe } from "./commands/inbox-serve.js";
 import {
   cmdRecurringList,
   cmdRecurringAdd,
@@ -250,6 +251,11 @@ program
     "Open the local inbox TUI (live view of fleet.db attention items)",
   )
   .action(() => cmdInbox());
+
+program
+  .command("inbox-serve")
+  .description("Start the local inbox HTTP server at 127.0.0.1:4411")
+  .action(() => cmdInboxServe());
 
 const recurringCmd = program
   .command("recurring")
