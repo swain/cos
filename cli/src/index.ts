@@ -22,6 +22,7 @@ import {
   cmdIdeaPromote,
   cmdIdeaInsert,
 } from "./commands/ideas.js";
+import { cmdGenerateIdeasDiff } from "./commands/generate-ideas.js";
 import {
   cmdNotify,
   cmdNotifyListUnpushed,
@@ -211,6 +212,24 @@ program
       source: opts.source,
       confidence: opts.confidence ? parseFloat(opts.confidence) : undefined,
       repos: opts.repos ? JSON.parse(opts.repos) : undefined,
+    }),
+  );
+
+program
+  .command("generate-ideas-diff")
+  .description(
+    "Scan the last 7d of merged PRs across watched repos for follow-up ideas (TODOs, console.logs, large files)",
+  )
+  .option("--dry-run", "print candidates without inserting", false)
+  .option("--since <yyyy-mm-dd>", "override the 7-day lookback")
+  .option("--pr-limit <n>", "max PRs per repo to scan", "30")
+  .option("--verbose", "print per-repo progress", false)
+  .action((opts) =>
+    cmdGenerateIdeasDiff({
+      dryRun: !!opts.dryRun,
+      since: opts.since,
+      prLimit: opts.prLimit ? parseInt(opts.prLimit, 10) : undefined,
+      verbose: !!opts.verbose,
     }),
   );
 
