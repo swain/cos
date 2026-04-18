@@ -52,7 +52,32 @@ This policy drives the **cos-pr sweep** (step 1 below) and how you triage `pr-*`
 
    Leave the PR open. The user will decide.
 
-6. **Merge the clean ones.** If all of (3) and (4) pass:
+6. **Rebase-check before merging.** Another cos PR may have merged between when this one's CI ran and now — squash-merging a stale branch can silently integrate code that was never tested against current `main`. Verify the PR branch is current with `origin/main` before merging:
+
+   ```bash
+   gh api "/repos/swain/cos/compare/main...<headRefName>" --jq '.behind_by'
+   ```
+
+   - **`0` (up to date):** proceed to step 7.
+   - **`> 0` (behind):** rebase the PR branch via GitHub:
+
+     ```bash
+     gh pr update-branch <number> --repo swain/cos --rebase
+     ```
+
+     On success, the rebase kicks off a new CI run. **Do not merge this tick** — checks will flip back to `IN_PROGRESS`. Move on; the next sweep will pick the PR up once green.
+
+     If `gh pr update-branch` fails (conflicts), leave the PR open and notify urgent:
+
+     ```bash
+     cos notify --urgency urgent \
+       --subject "cos PR conflicted during auto-merge sweep: <title>" \
+       --body "<pr-url> — rebase onto origin/main failed; manual resolution required."
+     ```
+
+     Skip this PR and move on.
+
+7. **Merge the clean ones.** If all of (3), (4), and (6) pass:
 
    ```bash
    gh pr merge <number> --repo swain/cos --squash --delete-branch
@@ -60,7 +85,7 @@ This policy drives the **cos-pr sweep** (step 1 below) and how you triage `pr-*`
 
    The matching work item's `pr-merged` signal (or the worker-done flow) will tidy up state on the next tick.
 
-7. **Record the sweep** in the decision log line in step 6 (e.g. `cos-sweep: merged 2, deferred 1 (red), anomalous 0`).
+8. **Record the sweep** in the decision log line in step 6 (e.g. `cos-sweep: merged 2, deferred 1 (red), rebased 1, anomalous 0`).
 
 ### 2. TRIAGE new signals
 
