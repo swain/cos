@@ -1,4 +1,6 @@
 cli/node_modules/
 cli/dist/
+cli/test-results/
+cli/playwright-report/
 .DS_Store
 .remember/

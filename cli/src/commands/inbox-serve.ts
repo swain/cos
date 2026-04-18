@@ -35,7 +35,7 @@ import {
 } from "../inbox/types.js";
 
 const HOST = "127.0.0.1";
-const PORT = 4411;
+const PORT = Number(process.env.COS_INBOX_PORT) || 4411;
 
 const escapeHtml = (s: string): string =>
   s
