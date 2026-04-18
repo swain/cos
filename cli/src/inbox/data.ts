@@ -263,7 +263,7 @@ const recentWinItems = (): InboxItem[] => {
   const wins: WorkItem[] = [
     ...workItems.list({ status: "merged" }),
     ...workItems.list({ status: "done" }),
-  ].filter((wi) => parseTs(wi.updated_at) >= cutoff);
+  ].filter((wi) => !wi.inbox_acked_at && parseTs(wi.updated_at) >= cutoff);
 
   return wins
     .sort((a, b) => parseTs(b.updated_at) - parseTs(a.updated_at))
