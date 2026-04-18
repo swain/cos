@@ -201,15 +201,15 @@ cos doctor --auto-fix                # apply fixes 1–5, notify on 6–7
 
 What each invariant means and what auto-fix does:
 
-| Invariant                  | What it catches                                                                                  | Auto-fix                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `zombie-tmux-window`       | session `running`/`starting` but the tmux window is gone                                         | mark session `stale`                                         |
-| `stale-heartbeat`          | heartbeat older than 20 min (configurable) on a live session                                     | mark session `stale`                                         |
-| `silent-worker`            | `~/.claude/cos/logs/worker-<sess>.log` is 0 bytes + older than 5 min while session is still live | kill tmux window, mark session `failed`, work item `blocked` |
-| `pr-status-drift`          | work item is `pr-open` but the PR is actually merged/closed on GitHub                            | reconcile to `merged` or `abandoned`                         |
-| `queued-but-running`       | work item is `queued` but has an active session                                                  | flip work item to `in-progress`                              |
-| `dispatch-circuit-breaker` | last 3 worker sessions all failed within 15 min of start                                         | **urgent** notification + `dispatch_paused=true`             |
-| `cron-tick-health`         | last 3 cron ticks all exited non-zero                                                            | **urgent** notification                                      |
+| Invariant                  | What it catches                                                                                       | Auto-fix                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `zombie-tmux-window`       | session `running`/`starting` but the tmux window is gone                                              | mark session `stale`                                         |
+| `stale-heartbeat`          | heartbeat older than 20 min (configurable) on a live session                                          | mark session `stale`                                         |
+| `silent-worker`            | `~/.claude/cos/logs/worker-<sess>.log` is 0 bytes + older than 5 min AND heartbeat also > 5 min stale | kill tmux window, mark session `failed`, work item `blocked` |
+| `pr-status-drift`          | work item is `pr-open` but the PR is actually merged/closed on GitHub                                 | reconcile to `merged` or `abandoned`                         |
+| `queued-but-running`       | work item is `queued` but has an active session                                                       | flip work item to `in-progress`                              |
+| `dispatch-circuit-breaker` | last 3 worker sessions all failed within 15 min of start                                              | **urgent** notification + `dispatch_paused=true`             |
+| `cron-tick-health`         | last 3 cron ticks all exited non-zero                                                                 | **urgent** notification                                      |
 
 `cos tick` already calls `cos doctor --auto-fix --format json` as step 0, so for routine drift you rarely need to run it by hand. Reach for `--dry-run` when: a notification points at something you want to inspect, a worker seems stuck, or dispatch got auto-paused and you're deciding whether to unpause.
 

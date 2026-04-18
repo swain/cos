@@ -222,7 +222,11 @@ const checkInvariant2StaleHeartbeat = (opts: DoctorOptions): DoctorFinding => {
   return f;
 };
 
-// Invariant 3: zero-byte worker log older than 5 minutes → claude produced no output.
+// Invariant 3: zero-byte worker log older than 5 minutes AND heartbeat also
+// stale → claude is dead. Fresh heartbeats mean claude IS running and executing
+// tool calls (claude -p doesn't stream tool calls, only final messages), so a
+// long tool-heavy task can legitimately have a 0-byte log for 30+ min. Killing
+// such a worker is a false-positive (observed 2026-04-17 on gp-api#1033).
 const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
   const f = emptyFinding("silent-worker");
   if (!existsSync(LOGS_DIR)) return f;
@@ -238,20 +242,24 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
       continue;
     }
     if (st.size > 0) continue;
-    const ageMin = (Date.now() - st.mtimeMs) / 60_000;
-    if (ageMin < SILENT_WORKER_MINUTES) continue;
+    const logAgeMin = (Date.now() - st.mtimeMs) / 60_000;
+    if (logAgeMin < SILENT_WORKER_MINUTES) continue;
     const sessionId = name.replace(/^worker-/, "").replace(/\.log$/, "");
     const s = sessionsApi.get(sessionId);
     // Only flag sessions that are still supposedly alive — if the session is
     // already completed/failed/stale/killed we don't re-escalate.
     if (!s || !["starting", "running", "idle"].includes(s.status)) continue;
+    const heartbeatAgeMin = minutesSince(s.last_heartbeat);
+    if (heartbeatAgeMin < SILENT_WORKER_MINUTES) continue;
     f.ok = false;
     f.entries.push({
       id: sessionId,
-      reason: "claude produced no output",
+      reason: `claude produced no output and heartbeat is ${heartbeatAgeMin.toFixed(1)} min stale`,
       details: {
         log_path: path,
-        age_minutes: Number(ageMin.toFixed(1)),
+        log_age_minutes: Number(logAgeMin.toFixed(1)),
+        heartbeat_age_minutes: Number(heartbeatAgeMin.toFixed(1)),
+        last_heartbeat: s.last_heartbeat,
         status: s.status,
         work_item_id: s.work_item_id,
       },
@@ -262,7 +270,7 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
       sessionsApi.update(sessionId, {
         status: "failed",
         current_step: "failed",
-        notes: `${s.notes ? s.notes + "; " : ""}claude produced no output`,
+        notes: `${s.notes ? s.notes + "; " : ""}claude silent + heartbeat stale`,
         ended_at: nowIso(),
       });
       if (s.work_item_id) {
@@ -273,7 +281,8 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
       }
       f.fixed.push({
         id: sessionId,
-        action: "marked failed, tmux window killed",
+        action:
+          "marked failed (log empty + heartbeat stale), tmux window killed",
       });
     }
   }
