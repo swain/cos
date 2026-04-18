@@ -1,15 +1,35 @@
 #!/usr/bin/env bash
-# COS cron tick wrapper — invoked by launchd every 15 minutes.
+# COS cron tick wrapper — invoked by launchd every 10 minutes.
 # Runs `cos tick` (which invokes claude -p with the cron prompt) and logs output.
 
 set -o pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
-# nvm-installed node — add the active node bin to PATH
+
+# Pin to the user's nvm default (same Node their interactive shell uses).
+# Avoids the "rebuild against launchd's Node breaks CLI in your shell" footgun.
 if [[ -d "$HOME/.nvm/versions/node" ]]; then
-  LATEST_NODE="$(ls -1 "$HOME/.nvm/versions/node" | sort -V | tail -1)"
-  if [[ -n "$LATEST_NODE" ]]; then
-    export PATH="$HOME/.nvm/versions/node/$LATEST_NODE/bin:$PATH"
+  DEFAULT_ALIAS=""
+  if [[ -f "$HOME/.nvm/alias/default" ]]; then
+    DEFAULT_ALIAS=$(cat "$HOME/.nvm/alias/default")
+  fi
+  TARGET_NODE_DIR=""
+  if [[ -n "$DEFAULT_ALIAS" ]]; then
+    if [[ "$DEFAULT_ALIAS" =~ ^[0-9]+$ ]]; then
+      # major version like "22" — pick latest v22.* installed
+      TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | grep "^v${DEFAULT_ALIAS}\." | sort -V | tail -1)
+    elif [[ "$DEFAULT_ALIAS" == v* ]]; then
+      TARGET_NODE_DIR="$DEFAULT_ALIAS"
+    else
+      TARGET_NODE_DIR="v$DEFAULT_ALIAS"
+    fi
+  fi
+  # Fallback: latest installed (old behavior) if we couldn't resolve the default.
+  if [[ -z "$TARGET_NODE_DIR" || ! -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+  fi
+  if [[ -n "$TARGET_NODE_DIR" && -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    export PATH="$HOME/.nvm/versions/node/$TARGET_NODE_DIR/bin:$PATH"
   fi
 fi
 
