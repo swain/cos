@@ -298,6 +298,28 @@ An enqueued item auto-dispatches if:
 
 Otherwise COS asks: "This looks underspecified — want me to groom it more, or dispatch anyway?"
 
+## Self-healing invariants (`cos doctor`)
+
+`cos doctor` runs as step 0 of every cron tick and can also be invoked by hand. It enforces a short list of cross-cutting invariants that, if violated, mean the system's view of itself has drifted from reality. The first five are auto-fixable when `--auto-fix` is set; the last two are escalations that always notify.
+
+| #   | Invariant                                                                                                                                  | Auto-fix action (with `--auto-fix`)                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 1   | Sessions marked `running`/`starting` whose tmux window is gone                                                                             | Mark session `stale`; record `tmux window not found` in notes                                                      |
+| 2   | Sessions marked `running` with `last_heartbeat` older than `stale_heartbeat_minutes` (default 20)                                          | Mark session `stale`; record the age in notes                                                                      |
+| 3   | Worker log `~/.claude/cos/logs/worker-<sess>.log` that is 0 bytes AND older than 5 min, while session is still `starting`/`running`/`idle` | Kill the tmux window; mark session `failed` with note `claude produced no output`; flip the work item to `blocked` |
+| 4   | Work items in status `pr-open` whose referenced PR is actually `MERGED` or `CLOSED` on GitHub                                              | Reconcile to `merged` or `abandoned`                                                                               |
+| 5   | Work items marked `queued` but with an active (`running`/`starting`) session on them                                                       | Flip work item to `in-progress`                                                                                    |
+| 6   | **Circuit breaker** — last 3 worker sessions all ended `failed` within 15 min of start (no PRs opened)                                     | Set `dispatch_paused=true` in `config.json`; push **urgent** notification                                          |
+| 7   | Last 3 cron ticks all exited non-zero                                                                                                      | Push **urgent** notification                                                                                       |
+
+Flags:
+
+- `--auto-fix` — apply fixes for 1–5; always notify on 6–7.
+- `--dry-run` — report only; never mutate state or send notifications.
+- `--format text|json` — default `text`; `json` is machine-readable and used by `cos tick`.
+
+The cron tick always calls doctor with `--auto-fix --format json` and embeds the resulting report in the state snapshot handed to the claude invocation (key: `doctor_report`). That lets the agent see what just got fixed without re-deriving it.
+
 ## Signal Collection
 
 MVP: **GitHub only.** Implemented as a function called at the start of each cron tick. Queries via `gh` CLI:

@@ -26,6 +26,7 @@ import {
 import { collectGithubSignals } from "../collectors/github.js";
 import { cmdRenderStatus } from "./fleet.js";
 import { ideas } from "../db.js";
+import { runDoctor, type DoctorReport } from "./doctor.js";
 
 const DEFAULT_CRON_PROMPT = `You are the COS (Chief of Staff) cron agent running a scheduled tick.
 
@@ -63,6 +64,25 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
   const startedAt = nowIso();
   console.error(chalk.gray(`[tick ${tickId}] start ${startedAt}`));
 
+  // 0) Doctor — run system invariants and auto-fix before anything else.
+  //    Runs even in --dry-run mode for the tick: the tick's dry-run only
+  //    skips invoking claude, but doctor's own dry-run is independent.
+  let doctorReport: DoctorReport | null = null;
+  try {
+    doctorReport = runDoctor({
+      autoFix: !opts.dryRun,
+      dryRun: !!opts.dryRun,
+      format: "json",
+    });
+    console.error(
+      chalk.gray(
+        `[tick] doctor: ${doctorReport.summary.issues} issue(s), fixed=${doctorReport.summary.fixed}, notified=${doctorReport.summary.notified}`,
+      ),
+    );
+  } catch (e: any) {
+    console.error(chalk.yellow(`[tick] doctor error: ${e.message}`));
+  }
+
   // 1) Collect GitHub signals
   try {
     const collected = await collectGithubSignals();
@@ -92,6 +112,7 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
   // 2) Prepare state snapshot for the claude invocation
   const snapshot = {
     now: nowIso(),
+    doctor_report: doctorReport,
     new_signals: signals.list({ status: "new" }),
     queued_items: workItems.list({ status: "queued" }),
     pr_open_items: workItems.list({ status: "pr-open" }),
