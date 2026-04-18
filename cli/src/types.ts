@@ -83,6 +83,7 @@ export const SessionStatusSchema = z.enum([
   "failed",
   "killed",
   "stale",
+  "archived",
 ]);
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 

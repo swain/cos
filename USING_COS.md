@@ -259,8 +259,18 @@ What each invariant means and what auto-fix does:
 | `queued-but-running`       | work item is `queued` but has an active session                                                       | flip work item to `in-progress`                              |
 | `dispatch-circuit-breaker` | last 3 worker sessions all failed within 15 min of start                                              | **urgent** notification + `dispatch_paused=true`             |
 | `cron-tick-health`         | last 3 cron ticks all exited non-zero                                                                 | **urgent** notification                                      |
+| `old-session-archive`      | session in `stale`/`killed`/`failed` older than 7 days (configurable)                                 | mark session `archived`                                      |
 
 `cos tick` already calls `cos doctor --auto-fix --format json` as step 0, so for routine drift you rarely need to run it by hand. Reach for `--dry-run` when: a notification points at something you want to inspect, a worker seems stuck, or dispatch got auto-paused and you're deciding whether to unpause.
+
+## Session retention policy
+
+`fleet.db` keeps every session row ever created — they are the audit log for worker runs. To keep the _dashboard view_ legible and the hot-path queries fast, the fleet view and the doctor treat age as first-class:
+
+- **`cos fleet` / `cos render-status`** count and list only sessions whose `started_at` is within the last 24h. Historical sessions (last week's stale worker, yesterday's failure) are still in the DB but won't clutter the digest. Override with `config.fleet_session_window_hours` in `~/.claude/cos/config.json` — e.g. set it to `72` if you want a three-day window.
+- **`cos doctor --auto-fix`** (also run automatically at the top of every `cos tick`) transitions sessions that have been in `stale`, `killed`, or `failed` for more than 7 days to status `archived`. Archived rows stay in the DB for long-horizon forensics but are invisible to the fleet view and the inbox. Override the threshold with `config.session_archive_days`.
+
+Archived sessions never come back to life; if you need to look one up, query `sqlite3 ~/.claude/cos/fleet.db "SELECT * FROM sessions WHERE status='archived' AND id=...";` directly.
 
 ## Troubleshooting
 

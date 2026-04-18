@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_work_item ON sessions(work_item_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 
 CREATE TABLE IF NOT EXISTS notifications (
   id          TEXT PRIMARY KEY,

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import chalk from "chalk";
 import {
   workItems,
@@ -9,7 +9,7 @@ import {
   cosLog,
   cronTicks,
 } from "../db.js";
-import { STATUS_MD, nowIso } from "../util.js";
+import { CONFIG_JSON, STATUS_MD, nowIso, parseJson } from "../util.js";
 import type { WorkItem } from "../types.js";
 
 // Threshold above which an in-progress cron tick is treated as potentially
@@ -17,6 +17,20 @@ import type { WorkItem } from "../types.js";
 // it past 15m. Anything older than this likely means launchd lost the child
 // or claude hung — surface a "looks stale" hint so the user notices.
 export const STALE_TICK_MINUTES = 20;
+
+const DEFAULT_SESSION_WINDOW_HOURS = 24;
+
+const readSessionWindowHours = (): number => {
+  if (!existsSync(CONFIG_JSON)) return DEFAULT_SESSION_WINDOW_HOURS;
+  const cfg = parseJson<{ fleet_session_window_hours?: number }>(
+    readFileSync(CONFIG_JSON, "utf8"),
+    {},
+  );
+  const hours = cfg.fleet_session_window_hours;
+  return typeof hours === "number" && hours > 0
+    ? hours
+    : DEFAULT_SESSION_WINDOW_HOURS;
+};
 
 export type LastFailure = {
   reason: string;
@@ -52,6 +66,7 @@ export type FleetSummary = {
   recent_notifications: ReturnType<typeof notifications.listUnpushed>;
   last_tick_at: string | null;
   current_tick: CurrentTick | null;
+  session_window_hours: number;
 };
 
 const enrichBlocked = (wi: WorkItem): EnrichedWorkItem => {
@@ -87,12 +102,16 @@ export const collectFleet = (): FleetSummary => {
     .map(enrichInProgress);
   const pr_open = workItems.list({ status: "pr-open" });
   const blocked = workItems.list({ status: "blocked" }).map(enrichBlocked);
+  const windowHours = readSessionWindowHours();
+  const startedSince = new Date(
+    Date.now() - windowHours * 3600_000,
+  ).toISOString();
   const all_active = [
-    ...sessions.list({ status: "running" }),
-    ...sessions.list({ status: "starting" }),
-    ...sessions.list({ status: "idle" }),
+    ...sessions.list({ status: "running", startedSince }),
+    ...sessions.list({ status: "starting", startedSince }),
+    ...sessions.list({ status: "idle", startedSince }),
   ];
-  const stale = sessions.list({ status: "stale" });
+  const stale = sessions.list({ status: "stale", startedSince });
   const new_signals = signals.list({ status: "new" });
   const new_ideas = ideas.list({ status: "new" });
   const recentLogs = cosLog.recent(1);
@@ -111,6 +130,7 @@ export const collectFleet = (): FleetSummary => {
     current_tick: active
       ? { id: active.id, started_at: active.started_at }
       : null,
+    session_window_hours: windowHours,
   };
 };
 
@@ -134,8 +154,12 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   lines.push(`- In progress: **${f.in_progress.length}**`);
   lines.push(`- PR open (awaiting review): **${f.pr_open.length}**`);
   lines.push(`- Blocked: **${f.blocked.length}**`);
-  lines.push(`- Active sessions: **${f.active_sessions.length}**`);
-  lines.push(`- Stale sessions: **${f.stale_sessions.length}**`);
+  lines.push(
+    `- Active sessions (last ${f.session_window_hours}h): **${f.active_sessions.length}**`,
+  );
+  lines.push(
+    `- Stale sessions (last ${f.session_window_hours}h): **${f.stale_sessions.length}**`,
+  );
   lines.push(`- New signals: **${f.new_signals_count}**`);
   lines.push(`- New ideas: **${f.new_ideas_count}**`);
   lines.push(`- Unpushed notifications: **${f.recent_notifications.length}**`);
