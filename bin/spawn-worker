@@ -1,79 +1,45 @@
 #!/usr/bin/env bash
-# COS worker spawner. Invoked by `cos dispatch <wi-id>`.
-# Creates worktrees, a session row, and opens a tmux window running `claude -p`.
-
 set -euo pipefail
 
 WI_ID="${1:-}"
-if [[ -z "$WI_ID" ]]; then
-  echo "usage: spawn-worker <work-item-id>" >&2
-  exit 2
-fi
+if [[ -z "$WI_ID" ]]; then echo "usage: spawn-worker <work-item-id>" >&2; exit 2; fi
 
 COS_BIN="$HOME/.claude/cos/bin/cos"
 CLAUDE_BIN="$HOME/.local/bin/claude"
 PLUGIN_DIR="$HOME/Repos/claude-projects"
 TMUX_SESSION="cos-workers"
 
-if [[ ! -x "$COS_BIN" ]]; then
-  echo "cos CLI not found at $COS_BIN" >&2
-  exit 2
-fi
+[[ -x "$COS_BIN" ]] || { echo "cos CLI not found at $COS_BIN" >&2; exit 2; }
+[[ -x "$CLAUDE_BIN" ]] || { echo "claude not found at $CLAUDE_BIN" >&2; exit 2; }
 
-if [[ ! -x "$CLAUDE_BIN" ]]; then
-  echo "claude binary not found at $CLAUDE_BIN" >&2
-  exit 2
-fi
-
-# 1. Create session row. Prints `sess-<ulid>` on stdout.
 SESSION_ID="$("$COS_BIN" session-new --work-item "$WI_ID" --kind worker | tail -1)"
-if [[ -z "$SESSION_ID" ]]; then
-  echo "failed to create session row" >&2
-  exit 1
-fi
+[[ -n "$SESSION_ID" ]] || { echo "session-new failed" >&2; exit 1; }
 echo "[spawn-worker] session: $SESSION_ID"
 
-# 2. Set up worktrees for each repo in the work item.
 echo "[spawn-worker] creating worktrees…"
 "$COS_BIN" worker-setup "$WI_ID"
-
-# 3. Determine primary worktree (cd destination).
 PRIMARY_WT="$("$COS_BIN" worker-primary-worktree "$WI_ID")"
-if [[ -z "$PRIMARY_WT" ]]; then
-  PRIMARY_WT="$HOME"
-fi
+[[ -n "$PRIMARY_WT" ]] || PRIMARY_WT="$HOME"
 echo "[spawn-worker] primary worktree: $PRIMARY_WT"
 
-# 4. Assemble the worker prompt. Write it to a temp file to avoid argv length issues.
 PROMPT_FILE="$(mktemp -t cos-prompt-XXXXXX).md"
 "$COS_BIN" worker-prompt "$WI_ID" --session "$SESSION_ID" > "$PROMPT_FILE"
-echo "[spawn-worker] prompt written: $PROMPT_FILE ($(wc -c < "$PROMPT_FILE") bytes)"
 
-# 5. Ensure tmux session exists.
-if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-  tmux new-session -d -s "$TMUX_SESSION" -n _placeholder -c "$HOME"
-fi
-
-# 6. Create a new window named after the work item.
-WINDOW_NAME="${WI_ID#wi-}"
-WINDOW_NAME="${WINDOW_NAME:0:18}"
+tmux has-session -t "$TMUX_SESSION" 2>/dev/null || tmux new-session -d -s "$TMUX_SESSION" -n _placeholder -c "$HOME"
+WINDOW_NAME="${WI_ID#wi-}"; WINDOW_NAME="${WINDOW_NAME:0:18}"
 tmux new-window -t "$TMUX_SESSION" -n "$WINDOW_NAME" -c "$PRIMARY_WT"
 WINDOW_TARGET="$TMUX_SESSION:$WINDOW_NAME"
 
-# 7. Launch claude with the prompt (reads from file to avoid shell quoting pain).
-#    - All output (stdout+stderr) is tee'd to a per-session log file so the safety-net
-#      has rich context to put in the failure reason.
-#    - The --failed safety-net is idempotent now (see cmdWorkerDone): if the worker
-#      already called worker-done --pr-url successfully, this is a no-op. If the
-#      worker genuinely exited without calling worker-done, the tail of its stdout
-#      becomes the failure reason — much more useful than "worker exited ...".
 WORKER_LOG="$HOME/.claude/cos/logs/worker-$SESSION_ID.log"
 mkdir -p "$HOME/.claude/cos/logs"
-CLAUDE_CMD="$CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\" 2>&1 | tee \"$WORKER_LOG\"; TAIL=\$(tail -c 1500 \"$WORKER_LOG\" 2>/dev/null | tr '\\n' ' ' | sed 's/  */ /g'); $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker exited without calling worker-done. last output: \${TAIL:-<empty>}\" 2>/dev/null || true"
-tmux send-keys -t "$WINDOW_TARGET" "$CLAUDE_CMD" Enter
 
-# 8. Record tmux window on the session row so fleet view can link to it.
-# (Not in CLI yet — leave for a self-build improvement.)
+# Key fixes:
+#   1. stdin < /dev/null — claude -p doesn't block on stdin when in a pipe.
+#   2. trap EXIT — on ANY shell exit (normal OR signal like SIGHUP from tmux kill-window),
+#      call worker-done --failed with the log tail. The idempotency check in cmdWorkerDone
+#      ensures a successful worker-done --pr-url is not clobbered.
+CLAUDE_CMD="trap 'TAIL=\$(tail -c 1500 \"$WORKER_LOG\" 2>/dev/null | tr \"\\n\" \" \" | sed \"s/  */ /g\"); $COS_BIN worker-done \"$SESSION_ID\" --failed \"worker shell exited. last output: \${TAIL:-<empty>}\" 2>/dev/null || true' EXIT; $CLAUDE_BIN --plugin-dir \"$PLUGIN_DIR\" --dangerously-skip-permissions -p \"\$(cat \"$PROMPT_FILE\")\" < /dev/null 2>&1 | tee \"$WORKER_LOG\""
+tmux send-keys -t "$WINDOW_TARGET" "$CLAUDE_CMD" Enter
 
 echo "[spawn-worker] dispatched $WI_ID in tmux $WINDOW_TARGET"
 echo "[spawn-worker] attach: tmux attach -t $WINDOW_TARGET"
