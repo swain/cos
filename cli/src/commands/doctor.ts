@@ -15,7 +15,15 @@ import {
   cosLog,
   notifications,
 } from "../db.js";
-import { CONFIG_JSON, HOME, LOGS_DIR, nowIso, parseJson } from "../util.js";
+import {
+  CONFIG_JSON,
+  HOME,
+  LOGS_DIR,
+  displayWorkItemId,
+  nowIso,
+  parseJson,
+  tmuxWindowName,
+} from "../util.js";
 import type { Session } from "../types.js";
 
 const TMUX_SESSION = "cos-workers";
@@ -130,13 +138,17 @@ const killTmuxWindow = (name: string): boolean => {
   }
 };
 
-// spawn-worker sets:   WINDOW_NAME="${WI_ID#wi-}"; WINDOW_NAME="${WINDOW_NAME:0:18}"
-// Sessions do not persist the tmux window name in fleet.db, so we recompute
-// the expected name from the work item id.
+// spawn-worker now computes the window name from the display id (wi-<num>-<slug>)
+// via `cos worker-window-name`. Sessions do not persist the tmux window name in
+// fleet.db, so we recompute it from the work item id, preferring the display
+// form and falling back to the raw internal id for rows that predate the
+// migration.
 const expectedTmuxWindow = (s: Session): string | null => {
   if (s.tmux_window) return s.tmux_window;
   if (!s.work_item_id) return null;
-  return s.work_item_id.replace(/^wi-/, "").slice(0, 18);
+  const wi = workItems.get(s.work_item_id);
+  const base = wi ? displayWorkItemId(wi) : s.work_item_id;
+  return tmuxWindowName(base);
 };
 
 const pushNotification = (
@@ -317,9 +329,10 @@ const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
     }
     if (state === "OPEN") continue;
     const newStatus = state === "MERGED" ? "merged" : "abandoned";
+    const display = displayWorkItemId(wi);
     f.ok = false;
     f.entries.push({
-      id: wi.id,
+      id: display,
       reason: `PR is ${state} on GitHub but work item is pr-open`,
       details: { pr_url: url, state, merged_at: mergedAt },
     });
@@ -327,7 +340,7 @@ const checkInvariant4PrDrift = (opts: DoctorOptions): DoctorFinding => {
       const patch: Record<string, unknown> = { status: newStatus };
       if (newStatus === "merged") patch.completed_at = mergedAt ?? nowIso();
       workItems.update(wi.id, patch as any);
-      f.fixed.push({ id: wi.id, action: `reconciled to ${newStatus}` });
+      f.fixed.push({ id: display, action: `reconciled to ${newStatus}` });
     }
   }
   return f;
@@ -351,15 +364,16 @@ const checkInvariant5QueuedButRunning = (
   for (const wi of queued) {
     const s = activeByWi.get(wi.id);
     if (!s) continue;
+    const display = displayWorkItemId(wi);
     f.ok = false;
     f.entries.push({
-      id: wi.id,
+      id: display,
       reason: "queued work item has active session",
       details: { session_id: s.id, session_status: s.status },
     });
     if (opts.autoFix && !opts.dryRun) {
       workItems.update(wi.id, { status: "in-progress", session_id: s.id });
-      f.fixed.push({ id: wi.id, action: "status → in-progress" });
+      f.fixed.push({ id: display, action: "status → in-progress" });
     }
   }
   return f;
@@ -629,9 +643,10 @@ export const checkInvariant9StrandedWorkItem = (
       : wi.session_id
         ? `linked session ${wi.session_id} not found`
         : "in-progress with no session_id";
+    const display = displayWorkItemId(wi);
     f.ok = false;
     f.entries.push({
-      id: wi.id,
+      id: display,
       reason,
       details: {
         session_id: wi.session_id,
@@ -642,7 +657,7 @@ export const checkInvariant9StrandedWorkItem = (
     if (opts.autoFix && !opts.dryRun) {
       workItems.update(wi.id, { status: "queued", session_id: null });
       f.fixed.push({
-        id: wi.id,
+        id: display,
         action: "status → queued, session_id cleared",
       });
     }

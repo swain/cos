@@ -39,6 +39,42 @@ export const slugify = (s: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
 
+// The canonical human-facing work item identifier: `wi-<num>-<slug>`.
+// The internal primary key (`wi-<ulid>`) stays on the row for schema stability;
+// this is what we print, log, and stamp on branches/worktrees/windows.
+export const displayWorkItemId = (wi: {
+  id: string;
+  num: number | null;
+  slug: string;
+}): string => {
+  if (wi.num == null) return wi.id;
+  const slug = wi.slug || "item";
+  return `wi-${wi.num}-${slug}`;
+};
+
+// Parse a user-provided work item reference. Accepts any of:
+//   - `wi-<ulid>`            (internal primary key)
+//   - `wi-<num>` / `<num>`   (human short form)
+//   - `wi-<num>-<slug>`      (human full form; slug ignored, num wins)
+// Returns either a lookup-by-id (ULID form) or lookup-by-num (numeric form).
+// Callers pass the result to the DB layer to fetch the row.
+export type WorkItemIdRef =
+  | { kind: "id"; id: string }
+  | { kind: "num"; num: number };
+
+export const parseWorkItemIdArg = (arg: string): WorkItemIdRef => {
+  const stripped = arg.startsWith("wi-") ? arg.slice(3) : arg;
+  const numeric = /^(\d+)(?:-.*)?$/.exec(stripped);
+  if (numeric) return { kind: "num", num: parseInt(numeric[1], 10) };
+  return { kind: "id", id: arg };
+};
+
+// tmux windows have a max name length that gets truncated in display; strip
+// the `wi-` prefix and cap at 18 chars to match what spawn-worker used to do
+// for ULIDs (so e.g. wi-42-fix-cos-worktrees → "42-fix-cos-worktre").
+export const tmuxWindowName = (displayId: string): string =>
+  displayId.replace(/^wi-/, "").slice(0, 18);
+
 export const tableRow = (cells: (string | number)[], widths: number[]) =>
   cells.map((c, i) => String(c).padEnd(widths[i] ?? 20)).join("  ");
 

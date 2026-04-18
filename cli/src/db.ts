@@ -10,6 +10,8 @@ import {
   MEETINGS_DIR,
   PROMPTS_DIR,
   parseJson,
+  slugify,
+  parseWorkItemIdArg,
 } from "./util.js";
 import type {
   WorkItem,
@@ -80,15 +82,52 @@ const migrate = (db: Database.Database) => {
       `ALTER TABLE work_items ADD COLUMN needs_planning INTEGER NOT NULL DEFAULT 0`,
     );
   }
-  // Index runs after ALTER so it works on both fresh (schema.sql created the
-  // column) and migrated DBs (ALTER just created it).
+  // num + slug: human-friendly identifiers (wi-42-fix-cos-worktrees).
+  // `num` stays nullable so the backfill below can fill existing rows in a
+  // controlled pass rather than fighting a NOT NULL default.
+  if (!hasColumn(db, "work_items", "num")) {
+    db.exec(`ALTER TABLE work_items ADD COLUMN num INTEGER`);
+  }
+  if (!hasColumn(db, "work_items", "slug")) {
+    db.exec(`ALTER TABLE work_items ADD COLUMN slug TEXT NOT NULL DEFAULT ''`);
+  }
+  // Indexes run after ALTER so they work on both fresh (schema.sql created the
+  // columns) and migrated DBs (ALTER just created them).
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_work_items_parent_id ON work_items(parent_id)`,
   );
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_num_unique ON work_items(num) WHERE num IS NOT NULL`,
+  );
+  // Backfill num in created_at order (earliest = 1) and slug from title.
+  const missing = db
+    .prepare(
+      `SELECT id, title, slug, num FROM work_items WHERE num IS NULL OR slug = '' ORDER BY created_at ASC, id ASC`,
+    )
+    .all() as { id: string; title: string; slug: string; num: number | null }[];
+  if (missing.length) {
+    const maxRow = db
+      .prepare(`SELECT MAX(num) AS max FROM work_items`)
+      .get() as { max: number | null };
+    let next = (maxRow.max ?? 0) + 1;
+    const update = db.prepare(
+      `UPDATE work_items SET num = COALESCE(num, @num), slug = CASE WHEN slug = '' THEN @slug ELSE slug END WHERE id = @id`,
+    );
+    const tx = db.transaction(() => {
+      for (const row of missing) {
+        const slug = row.slug || slugify(row.title) || "item";
+        const num = row.num ?? next++;
+        update.run({ id: row.id, num, slug });
+      }
+    });
+    tx();
+  }
 };
 
 const rowToWorkItem = (r: any): WorkItem => ({
   id: r.id,
+  num: r.num ?? null,
+  slug: r.slug ?? "",
   title: r.title,
   description: r.description,
   acceptance_criteria: r.acceptance_criteria,
@@ -158,14 +197,26 @@ const rowToNotification = (r: any): Notification => ({
   created_at: r.created_at,
 });
 
+export type WorkItemInsert = Omit<
+  WorkItem,
+  "num" | "slug" | "created_at" | "updated_at" | "completed_at"
+>;
+
 export const workItems = {
-  insert(wi: Omit<WorkItem, "created_at" | "updated_at" | "completed_at">) {
+  insert(wi: WorkItemInsert): { num: number; slug: string } {
     const db = getDb();
+    const slug = slugify(wi.title) || "item";
+    const maxRow = db
+      .prepare(`SELECT MAX(num) AS max FROM work_items`)
+      .get() as { max: number | null };
+    const num = (maxRow.max ?? 0) + 1;
     db.prepare(
-      `INSERT INTO work_items (id, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths, needs_approval, parent_id, needs_planning)
-       VALUES (@id, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths, @needs_approval, @parent_id, @needs_planning)`,
+      `INSERT INTO work_items (id, num, slug, title, description, acceptance_criteria, repos, priority, status, source, depends_on, session_id, pr_urls, worklog_path, worktree_paths, needs_approval, parent_id, needs_planning)
+       VALUES (@id, @num, @slug, @title, @description, @acceptance_criteria, @repos, @priority, @status, @source, @depends_on, @session_id, @pr_urls, @worklog_path, @worktree_paths, @needs_approval, @parent_id, @needs_planning)`,
     ).run({
       ...wi,
+      num,
+      slug,
       repos: JSON.stringify(wi.repos),
       depends_on: JSON.stringify(wi.depends_on),
       pr_urls: JSON.stringify(wi.pr_urls),
@@ -174,12 +225,27 @@ export const workItems = {
       parent_id: wi.parent_id ?? null,
       needs_planning: wi.needs_planning ? 1 : 0,
     });
+    return { num, slug };
   },
   get(id: string): WorkItem | null {
     const r = getDb()
       .prepare("SELECT * FROM work_items WHERE id = ?")
       .get(id) as any;
     return r ? rowToWorkItem(r) : null;
+  },
+  getByNum(num: number): WorkItem | null {
+    const r = getDb()
+      .prepare("SELECT * FROM work_items WHERE num = ?")
+      .get(num) as any;
+    return r ? rowToWorkItem(r) : null;
+  },
+  // Resolve a user-supplied reference (wi-<ulid>, wi-<num>, wi-<num>-<slug>,
+  // or bare <num>) to the full WorkItem row, or null if not found.
+  resolve(arg: string): WorkItem | null {
+    const ref = parseWorkItemIdArg(arg);
+    return ref.kind === "num"
+      ? workItems.getByNum(ref.num)
+      : workItems.get(ref.id);
   },
   list(filter?: { status?: string; priority?: number }): WorkItem[] {
     let sql = "SELECT * FROM work_items WHERE 1=1";

@@ -9,7 +9,13 @@ import {
   cosLog,
   cronTicks,
 } from "../db.js";
-import { CONFIG_JSON, STATUS_MD, nowIso, parseJson } from "../util.js";
+import {
+  CONFIG_JSON,
+  STATUS_MD,
+  displayWorkItemId,
+  nowIso,
+  parseJson,
+} from "../util.js";
 import type { WorkItem } from "../types.js";
 
 // Threshold above which an in-progress cron tick is treated as potentially
@@ -178,7 +184,7 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   lines.push("");
 
   const fmtWI = (wi: EnrichedWorkItem) =>
-    `- \`${wi.id}\` **P${wi.priority}** ${wi.title} _[${wi.repos.join(", ") || "—"}]_`;
+    `- \`${displayWorkItemId(wi)}\` **P${wi.priority}** ${wi.title} _[${wi.repos.join(", ") || "—"}]_`;
 
   if (f.pr_open.length) {
     lines.push("## PRs awaiting review");
@@ -228,17 +234,21 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
     lines.push("");
   }
 
-  const titleFor = (work_item_id: string | null): string => {
-    if (!work_item_id) return "—";
-    return workItems.get(work_item_id)?.title ?? "—";
+  const lookupWi = (work_item_id: string | null) =>
+    work_item_id ? workItems.get(work_item_id) : null;
+  const wiLabel = (work_item_id: string | null): string => {
+    const wi = lookupWi(work_item_id);
+    return wi ? displayWorkItemId(wi) : "—";
   };
+  const titleFor = (work_item_id: string | null): string =>
+    lookupWi(work_item_id)?.title ?? "—";
 
   if (f.active_sessions.length) {
     lines.push("## Active sessions");
     lines.push("");
     for (const s of f.active_sessions) {
       lines.push(
-        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${s.work_item_id ?? "—"}) kind=${s.kind} step=${s.current_step ?? "—"} hb=${s.last_heartbeat}`,
+        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${wiLabel(s.work_item_id)}) kind=${s.kind} step=${s.current_step ?? "—"} hb=${s.last_heartbeat}`,
       );
     }
     lines.push("");
@@ -249,7 +259,7 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
     lines.push("");
     f.stale_sessions.forEach((s) =>
       lines.push(
-        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${s.work_item_id ?? "—"}) last=${s.last_heartbeat}`,
+        `- \`${s.id}\` **${titleFor(s.work_item_id)}** (wi=${wiLabel(s.work_item_id)}) last=${s.last_heartbeat}`,
       ),
     );
     lines.push("");

@@ -13,6 +13,8 @@ export type WorkItemStatus = z.infer<typeof WorkItemStatusSchema>;
 
 export const WorkItemSchema = z.object({
   id: z.string(),
+  num: z.number().int().positive().nullable(),
+  slug: z.string(),
   title: z.string(),
   description: z.string(),
   acceptance_criteria: z.string(),

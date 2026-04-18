@@ -12,9 +12,10 @@ import {
   WORKLOGS_DIR,
   CONFIG_JSON,
   WATCHED_REPOS_JSON,
-  slugify,
+  displayWorkItemId,
   parseJson,
   shortRepoName,
+  tmuxWindowName,
   loadWatchedRepoBaseBranches,
 } from "../util.js";
 
@@ -131,16 +132,16 @@ const postSetupHook = (repoShort: string): string => {
   return ":";
 };
 
-export const cmdWorkerSetup = (workItemId: string) => {
-  const wi = workItems.get(workItemId);
+export const cmdWorkerSetup = (workItemRef: string) => {
+  const wi = workItems.resolve(workItemRef);
   if (!wi) {
-    console.error(chalk.red(`work item not found: ${workItemId}`));
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
     process.exit(2);
   }
   const { defaultBaseBranch, baseBranchByShortName } =
     loadWatchedRepoBaseBranches(WATCHED_REPOS_JSON);
-  const slug = slugify(wi.title);
-  const branch = `cos/${wi.id}-${slug}`;
+  const displayId = displayWorkItemId(wi);
+  const branch = `cos/${displayId}`;
   const out: Record<string, string> = {};
 
   for (const repoRaw of wi.repos) {
@@ -157,7 +158,7 @@ export const cmdWorkerSetup = (workItemId: string) => {
     }
     const wtBase = join(dirname(repoPath), `${short}-worktrees`);
     mkdirSync(wtBase, { recursive: true });
-    const wtPath = join(wtBase, `${wi.id}-${slug}`);
+    const wtPath = join(wtBase, displayId);
     if (!existsSync(wtPath)) {
       try {
         execSync(`git -C "${repoPath}" fetch origin ${baseBranch}`, {
@@ -185,7 +186,7 @@ export const cmdWorkerSetup = (workItemId: string) => {
     }
     out[repoRaw] = wtPath;
   }
-  workItems.update(workItemId, { worktree_paths: out });
+  workItems.update(wi.id, { worktree_paths: out });
   console.log(JSON.stringify(out, null, 2));
 };
 
@@ -209,7 +210,7 @@ Worktrees (work in these directories):
 
 Rules:
 1. Before changing any repo, read its CLAUDE.md (and ~/.claude/cos/arch.md).
-2. Create a branch off latest develop named \`cos/{{WI_ID}}-<slug>\`. Worktree command already created the branch.
+2. Create a branch off latest develop named \`cos/{{WI_ID}}\`. Worktree command already created the branch.
 3. Commit incrementally (one logical unit per commit, imperative subject lines).
 4. Run tests + lint before opening any PR.
 5. Do NOT self-approve. Open the PR with base=develop via \`gh pr create --base develop\`.
@@ -224,19 +225,20 @@ Work item details (JSON):
 
 Begin now.`;
 
-export const cmdWorkerPrompt = (workItemId: string, sessionId: string) => {
-  const wi = workItems.get(workItemId);
+export const cmdWorkerPrompt = (workItemRef: string, sessionId: string) => {
+  const wi = workItems.resolve(workItemRef);
   if (!wi) {
-    console.error(chalk.red(`work item not found: ${workItemId}`));
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
     process.exit(2);
   }
-  const worklogPath = wi.worklog_path ?? join(WORKLOGS_DIR, `${workItemId}.md`);
+  const displayId = displayWorkItemId(wi);
+  const worklogPath = wi.worklog_path ?? join(WORKLOGS_DIR, `${displayId}.md`);
   if (!existsSync(worklogPath)) {
     writeFileSync(
       worklogPath,
-      `# Worklog: ${wi.title}\n\n- work item: ${wi.id}\n- session: ${sessionId}\n- repos: ${wi.repos.join(", ")}\n- priority: P${wi.priority}\n\n## Goal\n${wi.description}\n\n## Acceptance\n${wi.acceptance_criteria}\n\n## Progress\n- started ${new Date().toISOString()}\n`,
+      `# Worklog: ${wi.title}\n\n- work item: ${displayId}\n- session: ${sessionId}\n- repos: ${wi.repos.join(", ")}\n- priority: P${wi.priority}\n\n## Goal\n${wi.description}\n\n## Acceptance\n${wi.acceptance_criteria}\n\n## Progress\n- started ${new Date().toISOString()}\n`,
     );
-    workItems.update(workItemId, { worklog_path: worklogPath });
+    workItems.update(wi.id, { worklog_path: worklogPath });
   }
   const worktrees =
     Object.entries(wi.worktree_paths)
@@ -244,7 +246,7 @@ export const cmdWorkerPrompt = (workItemId: string, sessionId: string) => {
       .join("\n") || "(none configured)";
   const template = workerPromptTemplate();
   const filled = template
-    .replaceAll("{{WI_ID}}", wi.id)
+    .replaceAll("{{WI_ID}}", displayId)
     .replaceAll("{{SESSION_ID}}", sessionId)
     .replaceAll("{{TITLE}}", wi.title)
     .replaceAll("{{DESCRIPTION}}", wi.description)
@@ -256,14 +258,15 @@ export const cmdWorkerPrompt = (workItemId: string, sessionId: string) => {
 };
 
 export const cmdDispatch = (
-  workItemId: string,
+  workItemRef: string,
   opts: { force?: boolean } = {},
 ) => {
-  const wi = workItems.get(workItemId);
+  const wi = workItems.resolve(workItemRef);
   if (!wi) {
-    console.error(chalk.red(`work item not found: ${workItemId}`));
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
     process.exit(2);
   }
+  const workItemId = wi.id;
   const cfg = parseJson<{
     dispatch_paused?: boolean;
     auto_dispatch_max_priority?: number;
@@ -368,46 +371,74 @@ export const cmdDispatch = (
   }
 };
 
-export const cmdWorkerPrimaryWorktree = (workItemId: string) => {
-  const wi = workItems.get(workItemId);
+export const cmdWorkerPrimaryWorktree = (workItemRef: string) => {
+  const wi = workItems.resolve(workItemRef);
   if (!wi) process.exit(2);
   const first = Object.values(wi.worktree_paths)[0];
   process.stdout.write(first ?? HOME);
 };
 
-export const cmdWorkItemSetDeps = (
-  workItemId: string,
-  opts: { add?: string[]; remove?: string[] },
-) => {
-  const wi = workItems.get(workItemId);
+export const cmdWorkerDisplayId = (workItemRef: string) => {
+  const wi = workItems.resolve(workItemRef);
   if (!wi) {
-    console.error(chalk.red(`work item not found: ${workItemId}`));
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
     process.exit(2);
   }
+  process.stdout.write(displayWorkItemId(wi));
+};
+
+export const cmdWorkerWindowName = (workItemRef: string) => {
+  const wi = workItems.resolve(workItemRef);
+  if (!wi) {
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
+    process.exit(2);
+  }
+  process.stdout.write(tmuxWindowName(displayWorkItemId(wi)));
+};
+
+export const cmdWorkItemSetDeps = (
+  workItemRef: string,
+  opts: { add?: string[]; remove?: string[] },
+) => {
+  const wi = workItems.resolve(workItemRef);
+  if (!wi) {
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
+    process.exit(2);
+  }
+  const workItemId = wi.id;
   const add = opts.add ?? [];
   const remove = opts.remove ?? [];
   if (!add.length && !remove.length) {
     console.error(chalk.yellow("nothing to do: pass --add and/or --remove"));
     process.exit(2);
   }
-  for (const id of [...add, ...remove]) {
-    if (id === workItemId) {
-      console.error(chalk.red(`cannot depend on self: ${id}`));
-      process.exit(2);
-    }
-    if (!workItems.get(id)) {
-      console.error(chalk.red(`dep not found: ${id}`));
-      process.exit(2);
+  const resolvedAdd: string[] = [];
+  const resolvedRemove: string[] = [];
+  for (const [bucket, arr] of [
+    ["add", add],
+    ["remove", remove],
+  ] as const) {
+    for (const ref of arr) {
+      const dep = workItems.resolve(ref);
+      if (!dep) {
+        console.error(chalk.red(`dep not found: ${ref}`));
+        process.exit(2);
+      }
+      if (dep.id === workItemId) {
+        console.error(chalk.red(`cannot depend on self: ${ref}`));
+        process.exit(2);
+      }
+      (bucket === "add" ? resolvedAdd : resolvedRemove).push(dep.id);
     }
   }
   const current = new Set(wi.depends_on);
-  for (const id of remove) current.delete(id);
-  for (const id of add) current.add(id);
+  for (const id of resolvedRemove) current.delete(id);
+  for (const id of resolvedAdd) current.add(id);
   const next = Array.from(current);
   workItems.update(workItemId, { depends_on: next });
   console.log(
     chalk.green("deps updated"),
-    workItemId,
+    displayWorkItemId(wi),
     chalk.gray(`depends_on=${JSON.stringify(next)}`),
   );
 };

@@ -19,7 +19,7 @@ Your job: deliver exactly this work item to an open PR, then exit. You are not a
 ## Rules (non-negotiable)
 
 1. **Read before writing.** Before touching any repo, read its `CLAUDE.md`. Also read `~/.claude/cos/arch.md` for cross-repo invariants.
-2. **Branch.** The worktree command already created a branch named `cos/{{WI_ID}}-<slug>` off the latest `develop` (or the repo's default branch, which is `develop` for GoodParty repos). Work on it. Do not switch branches.
+2. **Branch.** The worktree command already created a branch named `cos/{{WI_ID}}` off the latest `develop` (or the repo's default branch, which is `develop` for GoodParty repos). Work on it. Do not switch branches.
 3. **Commit incrementally.** One logical unit per commit. Imperative subject lines ("Add…", "Fix…", "Update…"). Body explains _why_ when non-obvious. Each commit should compile and be reviewable in isolation.
 4. **Test before pushing.** Run tests and lint. If the repo has `npm run verify` or equivalent, use it. Don't open a PR with broken CI — fix or skip.
 5. **Rebase, then open PR.** Before pushing and running `gh pr create`, sync onto the latest base branch so your PR doesn't land stale:

@@ -26,7 +26,10 @@ PROMPT_FILE="$(mktemp -t cos-prompt-XXXXXX).md"
 "$COS_BIN" worker-prompt "$WI_ID" --session "$SESSION_ID" > "$PROMPT_FILE"
 
 tmux has-session -t "$TMUX_SESSION" 2>/dev/null || tmux new-session -d -s "$TMUX_SESSION" -n _placeholder -c "$HOME"
-WINDOW_NAME="${WI_ID#wi-}"; WINDOW_NAME="${WINDOW_NAME:0:18}"
+WINDOW_NAME="$("$COS_BIN" worker-window-name "$WI_ID" 2>/dev/null)"
+if [[ -z "$WINDOW_NAME" ]]; then
+  WINDOW_NAME="${WI_ID#wi-}"; WINDOW_NAME="${WINDOW_NAME:0:18}"
+fi
 tmux new-window -t "$TMUX_SESSION" -n "$WINDOW_NAME" -c "$PRIMARY_WT"
 WINDOW_TARGET="$TMUX_SESSION:$WINDOW_NAME"
 

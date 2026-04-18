@@ -9,7 +9,7 @@ allowed-tools: Bash(cos:*)
 
 ## Your task
 
-Dispatch work item(s) from the queue. `$ARGUMENTS` should be a work item id (e.g. `wi-01K...`) or a filter ("all P2", "everything queued for gp-api").
+Dispatch work item(s) from the queue. `$ARGUMENTS` should be a work item id (e.g. `wi-42`, `wi-42-fix-cos-worktrees`, or the full ULID `wi-01K…`) or a filter ("all P2", "everything queued for gp-api").
 
 - For a single id: run `cos dispatch <id>`. If auto-dispatch refuses (priority too high, missing fields, dispatch paused), report the reason and ask before passing `--force`.
 - For a filter: list the matching ids, confirm with the user, then dispatch each in turn. Don't exceed the daily cap in `~/.claude/cos/config.json`.

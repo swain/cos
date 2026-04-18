@@ -7,6 +7,7 @@ import {
   cronTicks,
   cosLog,
 } from "../db.js";
+import { displayWorkItemId } from "../util.js";
 import type { WorkItem } from "../types.js";
 import {
   flattenDashboard,
@@ -75,6 +76,12 @@ const wiTitleMap = (): Map<string, string> => {
   return m;
 };
 
+const wiDisplayIdMap = (): Map<string, string> => {
+  const m = new Map<string, string>();
+  for (const wi of workItems.list()) m.set(wi.id, displayWorkItemId(wi));
+  return m;
+};
+
 const needsDecisionItems = (): InboxItem[] => {
   const items: InboxItem[] = [];
 
@@ -113,6 +120,7 @@ const needsDecisionItems = (): InboxItem[] => {
       key: `work-item:${wi.id}`,
       kind: "work-item",
       id: wi.id,
+      displayLabel: displayWorkItemId(wi),
       section: "needsDecision",
       urgency: "urgent",
       subject: `P${wi.priority} ${wi.title}`,
@@ -130,6 +138,7 @@ const needsDecisionItems = (): InboxItem[] => {
       key: `blocked-item:${wi.id}`,
       kind: "blocked-item",
       id: wi.id,
+      displayLabel: displayWorkItemId(wi),
       section: "needsDecision",
       urgency: "urgent",
       subject: `BLOCKED P${wi.priority} ${wi.title}`,
@@ -153,6 +162,7 @@ const needsDecisionItems = (): InboxItem[] => {
       key: `pr-review:${wi.id}`,
       kind: "pr-review",
       id: wi.id,
+      displayLabel: displayWorkItemId(wi),
       section: "needsDecision",
       urgency: "urgent",
       subject: `REVIEW: ${wi.title}`,
@@ -185,7 +195,10 @@ const sessionSummaryForWorkItem = (wiId: string): string | null => {
   return `last session ${latest.status}, step=${latest.current_step ?? "—"}`;
 };
 
-const activeItems = (titles: Map<string, string>): InboxItem[] => {
+const activeItems = (
+  titles: Map<string, string>,
+  displayIds: Map<string, string>,
+): InboxItem[] => {
   const items: InboxItem[] = [];
   const statuses: ("running" | "starting" | "idle")[] = [
     "running",
@@ -198,6 +211,9 @@ const activeItems = (titles: Map<string, string>): InboxItem[] => {
         ? (titles.get(sess.work_item_id) ?? sess.work_item_id)
         : sess.kind;
       const hbAge = ageMinutes(sess.last_heartbeat);
+      const wiDisplay = sess.work_item_id
+        ? (displayIds.get(sess.work_item_id) ?? sess.work_item_id)
+        : "—";
       items.push({
         key: `worker:${sess.id}`,
         kind: "worker",
@@ -206,7 +222,7 @@ const activeItems = (titles: Map<string, string>): InboxItem[] => {
         urgency: "normal",
         subject: `${status.toUpperCase()} ${title}`,
         body: trimBody(
-          `step=${sess.current_step ?? "—"} hb=${hbAge}m ago wi=${sess.work_item_id ?? "—"}`,
+          `step=${sess.current_step ?? "—"} hb=${hbAge}m ago wi=${wiDisplay}`,
         ),
         related_ids: sess.work_item_id ? [sess.work_item_id] : [],
         created_at: sess.started_at,
@@ -214,7 +230,7 @@ const activeItems = (titles: Map<string, string>): InboxItem[] => {
           step: sess.current_step,
           last_heartbeat: sess.last_heartbeat,
           hb_age_minutes: hbAge,
-          work_item_id: sess.work_item_id,
+          work_item_id: wiDisplay,
         },
       });
     }
@@ -231,6 +247,7 @@ const queueItems = (): InboxItem[] => {
     key: `queue-item:${wi.id}`,
     kind: "queue-item" as const,
     id: wi.id,
+    displayLabel: displayWorkItemId(wi),
     section: "queue" as const,
     urgency: "normal" as const,
     subject: `P${wi.priority} ${wi.title}`,
@@ -255,6 +272,7 @@ const recentWinItems = (): InboxItem[] => {
       key: `recent-win:${wi.id}`,
       kind: "recent-win" as const,
       id: wi.id,
+      displayLabel: displayWorkItemId(wi),
       section: "recentWins" as const,
       urgency: "digest" as const,
       subject: `${wi.status.toUpperCase()} ${wi.title}`,
@@ -269,12 +287,15 @@ const recentWinItems = (): InboxItem[] => {
     }));
 };
 
-const anomalyItems = (): InboxItem[] => {
+const anomalyItems = (displayIds: Map<string, string>): InboxItem[] => {
   const items: InboxItem[] = [];
   for (const status of ["stale", "failed"] as const) {
     for (const sess of sessions.list({ status })) {
       if (sess.acked_at) continue;
       const hbAge = ageMinutes(sess.last_heartbeat);
+      const wiDisplay = sess.work_item_id
+        ? (displayIds.get(sess.work_item_id) ?? sess.work_item_id)
+        : "—";
       items.push({
         key: `session:${sess.id}`,
         kind: "session",
@@ -283,7 +304,7 @@ const anomalyItems = (): InboxItem[] => {
         urgency: "normal",
         subject: `${status.toUpperCase()} session ${sess.id}`,
         body: trimBody(
-          `wi=${sess.work_item_id ?? "—"} step=${sess.current_step ?? "—"} hb=${hbAge}m ago${
+          `wi=${wiDisplay} step=${sess.current_step ?? "—"} hb=${hbAge}m ago${
             sess.notes ? ` — ${sess.notes}` : ""
           }`,
         ),
@@ -294,7 +315,7 @@ const anomalyItems = (): InboxItem[] => {
           hb_age_minutes: hbAge,
           last_heartbeat: sess.last_heartbeat,
           notes: sess.notes,
-          work_item_id: sess.work_item_id,
+          work_item_id: wiDisplay,
         },
       });
     }
@@ -323,14 +344,15 @@ const notificationTail = (
 
 export const collectDashboard = (): InboxDashboard => {
   const titles = wiTitleMap();
+  const displayIds = wiDisplayIdMap();
   return {
     needsDecision: needsDecisionItems().sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     ),
-    active: activeItems(titles),
+    active: activeItems(titles, displayIds),
     queue: queueItems(),
     recentWins: recentWinItems(),
-    anomalies: anomalyItems(),
+    anomalies: anomalyItems(displayIds),
     fyi: notificationTail("normal", "fyi").slice(0, SECTION_LIMIT),
     digest: notificationTail("digest", "digest").slice(0, SECTION_LIMIT),
   };

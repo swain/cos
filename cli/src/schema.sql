@@ -2,6 +2,8 @@
 
 CREATE TABLE IF NOT EXISTS work_items (
   id                  TEXT PRIMARY KEY,
+  num                 INTEGER UNIQUE,
+  slug                TEXT NOT NULL DEFAULT '',
   title               TEXT NOT NULL,
   description         TEXT NOT NULL,
   acceptance_criteria TEXT NOT NULL DEFAULT '',
@@ -21,8 +23,9 @@ CREATE TABLE IF NOT EXISTS work_items (
   completed_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_work_items_status_priority ON work_items(status, priority);
--- Note: idx_work_items_parent_id is created by migrate() in db.ts so it works
--- on pre-existing DBs where the column is added via ALTER TABLE.
+-- Note: idx_work_items_parent_id and idx_work_items_num are created by migrate()
+-- in db.ts so schema.sql stays safe on pre-migration databases that lack those
+-- columns (CREATE INDEX fails if the column is missing even with IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS ideas (
   id           TEXT PRIMARY KEY,

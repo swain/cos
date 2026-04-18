@@ -104,7 +104,7 @@ Examples:
 - "status?" / "what's going on?" → `cos fleet` rendered as 3-line digest
 - "add: fix the null check in auth.service" → grooms inline, `cos enqueue`, offers to dispatch
 - "idea: split queueConsumer per-type" → `cos idea`
-- "dispatch wi-01K…" → `cos dispatch`
+- "dispatch wi-42" / "dispatch wi-42-fix-cos-worktrees" → `cos dispatch`
 - "triage ideas" / `/groom` → walks backlog, one-at-a-time
 - "what do you think about X?" (design / tradeoff) → full persona + context loaded
 - "pressure-test this design doc" [paste] → rigorous-not-polite critique

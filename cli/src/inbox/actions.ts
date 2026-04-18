@@ -2,7 +2,7 @@ import { spawn, execSync } from "node:child_process";
 import { join } from "node:path";
 import { getDb, notifications, sessions, workItems } from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
-import { COS_DIR } from "../util.js";
+import { COS_DIR, displayWorkItemId, tmuxWindowName } from "../util.js";
 import type { InboxDashboard, InboxItem } from "./types.js";
 
 const COS_BIN = join(COS_DIR, "bin/cos");
@@ -25,13 +25,16 @@ const runCos = (args: string[]): Promise<{ ok: boolean; stderr: string }> =>
 
 export type ActionResult = { ok: boolean; message: string; detail?: string };
 
-const tmuxWindowName = (wiId: string) => wiId.replace(/^wi-/, "").slice(0, 18);
+const windowNameForWi = (wiId: string): string => {
+  const wi = workItems.get(wiId);
+  return tmuxWindowName(wi ? displayWorkItemId(wi) : wiId);
+};
 
 const killTmuxWindow = (sessionId: string, wiId: string | null) => {
   const candidates: string[] = [];
   const sess = sessions.get(sessionId);
   if (sess?.tmux_window) candidates.push(sess.tmux_window);
-  if (wiId) candidates.push(`${TMUX_WORKER_SESSION}:${tmuxWindowName(wiId)}`);
+  if (wiId) candidates.push(`${TMUX_WORKER_SESSION}:${windowNameForWi(wiId)}`);
   for (const target of candidates) {
     try {
       execSync(`tmux kill-window -t "${target}"`, { stdio: "pipe" });
@@ -61,37 +64,37 @@ export const approveWorkItem = async (id: string): Promise<ActionResult> => {
 export const dispatchWorkItem = approveWorkItem;
 
 export const snoozeWorkItem = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
   const next = Math.min(5, wi.priority + 1);
-  workItems.update(id, { priority: next });
-  return { ok: true, message: `snoozed ${id} → P${next}` };
+  workItems.update(wi.id, { priority: next });
+  return { ok: true, message: `snoozed ${displayWorkItemId(wi)} → P${next}` };
 };
 
 export const bumpWorkItem = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
   const next = Math.max(1, wi.priority - 1);
-  workItems.update(id, { priority: next });
-  return { ok: true, message: `bumped ${id} → P${next}` };
+  workItems.update(wi.id, { priority: next });
+  return { ok: true, message: `bumped ${displayWorkItemId(wi)} → P${next}` };
 };
 
 export const archiveWorkItem = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
-  workItems.update(id, { status: "abandoned" });
-  return { ok: true, message: `archived ${id}` };
+  workItems.update(wi.id, { status: "abandoned" });
+  return { ok: true, message: `archived ${displayWorkItemId(wi)}` };
 };
 
 export const abandonWorkItem = archiveWorkItem;
 
 export const retryWorkItem = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
-  workItems.update(id, { status: "queued", session_id: null });
-  const r = await runCos(["dispatch", id, "--force"]);
+  workItems.update(wi.id, { status: "queued", session_id: null });
+  const r = await runCos(["dispatch", wi.id, "--force"]);
   return r.ok
-    ? { ok: true, message: `retrying ${id}` }
+    ? { ok: true, message: `retrying ${displayWorkItemId(wi)}` }
     : {
         ok: false,
         message: `retry failed: ${r.stderr.trim().split("\n")[0]}`,
@@ -99,14 +102,14 @@ export const retryWorkItem = async (id: string): Promise<ActionResult> => {
 };
 
 export const markPrReviewed = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
   getDb()
     .prepare(
       `UPDATE work_items SET inbox_acked_at = datetime('now') WHERE id = ?`,
     )
-    .run(id);
-  return { ok: true, message: `marked ${id} reviewed` };
+    .run(wi.id);
+  return { ok: true, message: `marked ${displayWorkItemId(wi)} reviewed` };
 };
 
 export const suppressSignal = async (id: string): Promise<ActionResult> => {
@@ -170,28 +173,29 @@ export const peekSession = async (id: string): Promise<ActionResult> => {
   const target =
     s.tmux_window ??
     (s.work_item_id
-      ? `${TMUX_WORKER_SESSION}:${tmuxWindowName(s.work_item_id)}`
+      ? `${TMUX_WORKER_SESSION}:${windowNameForWi(s.work_item_id)}`
       : TMUX_WORKER_SESSION);
   const hint = `tmux attach -t ${target}`;
   return { ok: true, message: hint, detail: hint };
 };
 
 export const viewFailureLog = async (id: string): Promise<ActionResult> => {
-  const wi = workItems.get(id);
+  const wi = workItems.resolve(id);
   if (!wi) return { ok: false, message: `work item not found: ${id}` };
+  const display = displayWorkItemId(wi);
   const rows = getDb()
     .prepare(
       `SELECT id, status, notes, current_step, last_heartbeat FROM sessions
        WHERE work_item_id = ? ORDER BY started_at DESC LIMIT 3`,
     )
-    .all(id) as {
+    .all(wi.id) as {
     id: string;
     status: string;
     notes: string | null;
     current_step: string | null;
     last_heartbeat: string;
   }[];
-  if (!rows.length) return { ok: true, message: `no sessions for ${id}` };
+  if (!rows.length) return { ok: true, message: `no sessions for ${display}` };
   const detail = rows
     .map(
       (r) =>
@@ -200,7 +204,7 @@ export const viewFailureLog = async (id: string): Promise<ActionResult> => {
         }`,
     )
     .join("\n");
-  return { ok: true, message: `failure log for ${id}`, detail };
+  return { ok: true, message: `failure log for ${display}`, detail };
 };
 
 export const enqueueInboxResponse = async (
@@ -221,7 +225,11 @@ export const enqueueInboxResponse = async (
     priority: 2,
     source: "inbox",
   });
-  return { ok: true, message: `enqueued ${id}` };
+  const wi = workItems.get(id);
+  return {
+    ok: true,
+    message: `enqueued ${wi ? displayWorkItemId(wi) : id}`,
+  };
 };
 
 export const markAllFyiRead = async (

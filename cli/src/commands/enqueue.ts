@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
 import chalk from "chalk";
 import { workItems } from "../db.js";
+import { displayWorkItemId } from "../util.js";
 import type { WorkItemStatus } from "../types.js";
 
 export type EnqueueArgs = {
@@ -18,7 +19,7 @@ export type EnqueueArgs = {
 
 export const cmdEnqueue = (args: EnqueueArgs): string => {
   const id = `wi-${ulid()}`;
-  workItems.insert({
+  const { num, slug } = workItems.insert({
     id,
     title: args.title,
     description: args.description,
@@ -36,9 +37,10 @@ export const cmdEnqueue = (args: EnqueueArgs): string => {
     parent_id: args.parentId ?? null,
     needs_planning: args.needsPlanning ?? false,
   });
+  const display = displayWorkItemId({ id, num, slug });
   console.log(
     chalk.green("enqueued"),
-    id,
+    display,
     chalk.gray(`priority=${args.priority} repos=${args.repos.join(",")}`),
   );
   return id;

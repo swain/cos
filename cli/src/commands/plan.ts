@@ -142,12 +142,13 @@ export type PlanOptions = {
   fromFile?: string;
 };
 
-export const cmdPlan = (workItemId: string, opts: PlanOptions = {}) => {
-  const parent = workItems.get(workItemId);
+export const cmdPlan = (workItemRef: string, opts: PlanOptions = {}) => {
+  const parent = workItems.resolve(workItemRef);
   if (!parent) {
-    console.error(chalk.red(`work item not found: ${workItemId}`));
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
     process.exit(2);
   }
+  const workItemId = parent.id;
   const existingChildren = workItems.listChildren(workItemId);
   if (existingChildren.length && !opts.replan) {
     console.error(

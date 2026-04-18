@@ -86,7 +86,9 @@ A persistent Chief of Staff built on Claude Code primitives. One persona, four m
 
 | column              | type                               | notes                                                                        |
 | ------------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
-| id                  | TEXT PK                            | `wi-<ulid>`                                                                  |
+| id                  | TEXT PK                            | `wi-<ulid>` — stable internal key; never shown to humans                     |
+| num                 | INTEGER UNIQUE                     | monotonically increasing human number; backfilled in created_at order        |
+| slug                | TEXT                               | lowercased alphanumeric+dash, derived from title, ≤40 chars                  |
 | title               | TEXT                               | short human label                                                            |
 | description         | TEXT                               | full scope                                                                   |
 | acceptance_criteria | TEXT                               | checklist the worker tests against                                           |
@@ -97,10 +99,12 @@ A persistent Chief of Staff built on Claude Code primitives. One persona, four m
 | depends_on          | TEXT (JSON array of work_item ids) | empty in MVP; used when planning arrives                                     |
 | session_id          | TEXT FK                            | current worker (nullable)                                                    |
 | pr_urls             | TEXT (JSON array)                  | PRs opened for this item                                                     |
-| worklog_path        | TEXT                               | `~/.claude/cos/worklogs/<id>.md`                                             |
+| worklog_path        | TEXT                               | `~/.claude/cos/worklogs/wi-<num>-<slug>.md`                                  |
 | created_at          | TIMESTAMP                          |                                                                              |
 | updated_at          | TIMESTAMP                          |                                                                              |
 | completed_at        | TIMESTAMP                          | nullable                                                                     |
+
+**Human-facing id = `wi-<num>-<slug>`** (e.g. `wi-42-fix-cos-worktrees`). Every user-visible surface — `cos enqueue` output, `cos fleet` rows, notification subjects, inbox rows, branches (`cos/wi-<num>-<slug>`), worktree dirs, worklog filenames, tmux window names — uses this form. The ULID `id` stays internal for referential stability. CLI commands that take a `<wi-id>` argument accept any of: the ULID, `wi-<num>`, `wi-<num>-<slug>`, or a bare `<num>`.
 
 ### ideas
 
