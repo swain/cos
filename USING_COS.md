@@ -47,6 +47,27 @@ If you ever catch yourself forming a CLI command in your head, you're working to
     status.md
 ```
 
+## Review policy per repo
+
+COS treats repos in two buckets:
+
+- **`cos` (this repo) — no human review.** Workers self-merge their own PR once CI is green, a quick smoke test passes, and the diff looks in-scope. The cron tick also sweeps open `swain/cos` PRs each 15 min and merges any that are green + non-anomalous. Anomaly = touches auth/secrets/launchd/hooks, or blows past the work item's declared scope; those get an urgent push to you instead of a merge.
+- **`thegoodparty/*` (product repos) — you review every PR.** Workers open PRs, never self-approve, never merge. This is shared team code; standard review discipline applies.
+
+If COS is ever unsure which bucket a PR falls in, it defaults to the stricter rule (treats it like `thegoodparty/*`).
+
+**Toggle.** `config.cos_auto_merge` (default `true`) turns the cos self-merge + sweep on and off. Set it to `false` and every cos PR goes back to the normal "notify urgent for review" path — useful if trust erodes, or if you're about to land something structural and want to eyeball each PR:
+
+```bash
+jq '.cos_auto_merge=false' ~/.claude/cos/config.json > /tmp/c && mv /tmp/c ~/.claude/cos/config.json
+```
+
+**What this means in practice:**
+
+- A cos worker that finishes with green CI will squash-merge itself and delete its branch before you ever see a notification. You'll notice it as a merged commit on `main` and a `pr-merged` notification in the digest.
+- You can still push back: just leave a review with `CHANGES_REQUESTED` on a cos PR before CI finishes and the sweep will skip it. A comment (without requesting changes) is also respected — the triage routes any `pr-comments-on-mine` signal on a cos PR to an urgent notify instead of letting the sweep merge past you.
+- Non-cos PRs are untouched by any of this. Workers on gp-api / gp-webapp / etc. still open PRs and wait.
+
 ## The queue model (signals → ideas → work items → sessions → PRs → done)
 
 Nothing bypasses the queue:
