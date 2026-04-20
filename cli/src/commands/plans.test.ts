@@ -66,6 +66,60 @@ describe("summarizePlan", () => {
   });
 });
 
+describe("decidePlanReviewAction", () => {
+  it("prompts on empty stdout (plannotator exited without feedback)", async () => {
+    const { decidePlanReviewAction } = await import("./plans.js");
+    expect(decidePlanReviewAction("")).toEqual({ kind: "prompt" });
+    expect(decidePlanReviewAction("   \n\n  ")).toEqual({ kind: "prompt" });
+  });
+
+  it("prompts when plannotator emits the empty-feedback sentinel", async () => {
+    const { decidePlanReviewAction } = await import("./plans.js");
+    expect(decidePlanReviewAction("No feedback provided.")).toEqual({
+      kind: "prompt",
+    });
+    expect(decidePlanReviewAction("No feedback provided.\n")).toEqual({
+      kind: "prompt",
+    });
+  });
+
+  it("resubmits with the trimmed feedback body on a real submission", async () => {
+    const { decidePlanReviewAction } = await import("./plans.js");
+    expect(
+      decidePlanReviewAction("\nMake option 3 use the accent color.\n"),
+    ).toEqual({
+      kind: "resubmit",
+      feedback: "Make option 3 use the accent color.",
+    });
+  });
+});
+
+describe("cmdPlanResubmit", () => {
+  it("updates the plan row with status=feedback and the feedback body, and records reviewed_at", async () => {
+    const { cmdEnqueue } = await import("./enqueue.js");
+    const { cmdPlanSubmit, cmdPlanResubmit } = await import("./plans.js");
+    const { plans } = await import("./../db.js");
+
+    const wiId = cmdEnqueue({
+      title: "Ship widget",
+      description: "Bake + ship",
+      acceptance: "",
+      repos: ["cos"],
+      priority: 3,
+    });
+    const planFile = join(tmp, "plan.md");
+    writeFileSync(planFile, "# Plan\n\nStep 1.\n");
+    const planId = cmdPlanSubmit(wiId, { path: planFile });
+
+    cmdPlanResubmit(planId!, { feedback: "option 2 is better" });
+
+    const p = plans.get(planId!)!;
+    expect(p.status).toBe("feedback");
+    expect(p.feedback_body).toBe("option 2 is better");
+    expect(p.reviewed_at).not.toBeNull();
+  });
+});
+
 describe("doctor: plan-awaiting-review-ageout invariant", () => {
   it("marks plans older than 7 days as superseded under autoFix", async () => {
     const { getDb, plans } = await import("./../db.js");
