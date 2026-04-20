@@ -370,9 +370,10 @@ const triagedIdeasCount = (): number =>
           i.triage_verdict === "suggest-kill"),
     ).length;
 
-// Po-voice one-liners for the Upcoming empty state. Picked at random per
-// render — the variety is the point, not persistence. Voice: dry, first
-// person, mildly sardonic, no emoji, no exclamation, one sentence, ≤100 chars.
+// Po-voice one-liners for the Upcoming empty state. Rotated on an hour
+// bucket — stable within the hour so refreshes don't shuffle, flips at the
+// boundary. Voice: dry, first person, mildly sardonic, no emoji, no
+// exclamation, one sentence, ≤100 chars.
 export const UPCOMING_EMPTY_QUIPS: readonly string[] = [
   "Nothing in the next 8 hours. Rarest state in your life — don't waste it on Slack.",
   "Calendar quiet. If you want it to stay that way, stop saying yes.",
@@ -391,8 +392,8 @@ export const UPCOMING_EMPTY_QUIPS: readonly string[] = [
   "Clear runway. Land something that mattered last month.",
 ];
 
-export const pickUpcomingEmptyQuip = (): string => {
-  const i = Math.floor(Math.random() * UPCOMING_EMPTY_QUIPS.length);
+export const pickUpcomingEmptyQuip = (now: number = Date.now()): string => {
+  const i = Math.floor(now / 3_600_000) % UPCOMING_EMPTY_QUIPS.length;
   return UPCOMING_EMPTY_QUIPS[i];
 };
 
