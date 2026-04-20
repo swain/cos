@@ -85,11 +85,12 @@ const sessionStatusColor = (status: string): string => {
   }
 };
 
-// Threshold above which an in-progress cron tick is treated as potentially
-// wedged. Typical ticks complete in ~1–5m; doctor-invoked claude -p can push
-// it past 15m. Anything older than this likely means launchd lost the child
-// or claude hung — surface a "looks stale" hint so the user notices.
-export const STALE_TICK_MINUTES = 20;
+// Age (minutes) above which an open cron_ticks row is assumed wedged rather
+// than live. Typical ticks complete in ~1–5m; anything past this is almost
+// certainly a claude subprocess that died without letting the bash wrapper
+// close the row (stream timeouts, sleeps, SIGKILLs). `collectFleet` hides such
+// rows so the "in progress" banner stops lying; the doctor closes them.
+export const STALE_TICK_MINUTES = 15;
 
 const DEFAULT_SESSION_WINDOW_HOURS = 24;
 
@@ -189,6 +190,14 @@ export const collectFleet = (): FleetSummary => {
   const new_ideas = ideas.list({ status: "new" });
   const recentLogs = cosLog.recent(1);
   const active = cronTicks.current();
+  // Suppress open-but-old rows from the in-progress banner. A row whose
+  // started_at is >STALE_TICK_MINUTES ago almost certainly represents a dead
+  // tick whose wrapper never got to close it; showing it as "in progress"
+  // just lies until the doctor cleans it up.
+  const current_tick =
+    active && minutesSinceSqliteTs(active.started_at) < STALE_TICK_MINUTES
+      ? { id: active.id, started_at: active.started_at }
+      : null;
   return {
     queued,
     in_progress,
@@ -200,9 +209,7 @@ export const collectFleet = (): FleetSummary => {
     new_ideas_count: new_ideas.length,
     recent_notifications: notifications.listUnpushed(),
     last_tick_at: recentLogs[0]?.tick_at ?? null,
-    current_tick: active
-      ? { id: active.id, started_at: active.started_at }
-      : null,
+    current_tick,
     session_window_hours: windowHours,
   };
 };
@@ -238,12 +245,8 @@ export const renderFleetMarkdown = (f: FleetSummary): string => {
   lines.push(`- Unpushed notifications: **${f.recent_notifications.length}**`);
   if (f.current_tick) {
     const ageMin = minutesSinceSqliteTs(f.current_tick.started_at);
-    const staleHint =
-      ageMin >= STALE_TICK_MINUTES
-        ? ` (looks stale — last completed ${f.last_tick_at ?? "_never_"})`
-        : "";
     lines.push(
-      `- Cron tick in progress: started ${ageMin}m ago, \`${f.current_tick.id}\`${staleHint}`,
+      `- Cron tick in progress: started ${ageMin}m ago, \`${f.current_tick.id}\``,
     );
   } else {
     lines.push(`- Last cron tick: ${f.last_tick_at ?? "_never_"}`);
@@ -365,15 +368,7 @@ export const renderFleetTable = (
   lines.push(`Unpushed notes:  ${f.recent_notifications.length}`);
   if (f.current_tick) {
     const ageMin = minutesSinceSqliteTs(f.current_tick.started_at);
-    const stale = ageMin >= STALE_TICK_MINUTES;
-    const staleHint = stale
-      ? chalk.red(
-          ` (looks stale — last completed ${f.last_tick_at ?? "never"})`,
-        )
-      : "";
-    lines.push(
-      `Cron tick:       in progress, started ${ageMin}m ago${staleHint}`,
-    );
+    lines.push(`Cron tick:       in progress, started ${ageMin}m ago`);
   } else {
     lines.push(`Last cron tick:  ${f.last_tick_at ?? "never"}`);
   }

@@ -15,7 +15,7 @@ import {
   renderFleetTable,
   renderFleetMarkdown,
 } from "./fleet.js";
-import { workItems, sessions, getDb } from "../db.js";
+import { workItems, sessions, cronTicks, getDb } from "../db.js";
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 const strip = (s: string) => s.replace(ANSI, "");
@@ -28,7 +28,7 @@ afterAll(() => {
 beforeEach(() => {
   const db = getDb();
   db.exec(
-    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log;",
+    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log; DELETE FROM cron_ticks;",
   );
 });
 
@@ -158,5 +158,41 @@ describe("renderFleetMarkdown (unchanged)", () => {
     expect(md).toContain("# COS Status");
     expect(md).toContain("## Queued");
     expect(md).toContain("- Queued: **1**");
+  });
+});
+
+describe("collectFleet: cron tick freshness", () => {
+  const backdateCronTick = (id: string, minutesAgo: number) => {
+    const when = new Date(Date.now() - minutesAgo * 60_000);
+    const stamp = when.toISOString().replace("T", " ").slice(0, 19);
+    getDb()
+      .prepare(`UPDATE cron_ticks SET started_at = ? WHERE id = ?`)
+      .run(stamp, id);
+  };
+
+  it("exposes current_tick for a fresh in-progress row (< 15 min)", () => {
+    cronTicks.start("tick-fresh");
+    backdateCronTick("tick-fresh", 3);
+    const f = collectFleet();
+    expect(f.current_tick).not.toBeNull();
+    expect(f.current_tick!.id).toBe("tick-fresh");
+    const out = strip(renderFleetTable(f, { termWidth: 120 }));
+    expect(out).toMatch(/Cron tick:\s+in progress/);
+    expect(out).not.toMatch(/looks stale/);
+  });
+
+  it("hides current_tick when started_at is older than 15 min", () => {
+    cronTicks.start("tick-stale");
+    backdateCronTick("tick-stale", 43);
+    const f = collectFleet();
+    expect(f.current_tick).toBeNull();
+    const table = strip(renderFleetTable(f, { termWidth: 120 }));
+    expect(table).toMatch(/Last cron tick:/);
+    expect(table).not.toMatch(/in progress/);
+    expect(table).not.toMatch(/looks stale/);
+    const md = renderFleetMarkdown(f);
+    expect(md).toMatch(/- Last cron tick:/);
+    expect(md).not.toMatch(/Cron tick in progress/);
+    expect(md).not.toMatch(/looks stale/);
   });
 });

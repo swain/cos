@@ -735,6 +735,16 @@ export const cronTicks = {
       .get() as any;
     return r ?? null;
   },
+  listStale(minutes: number): CronTick[] {
+    return getDb()
+      .prepare(
+        `SELECT * FROM cron_ticks
+         WHERE ended_at IS NULL
+           AND started_at < datetime('now', '-' || @minutes || ' minutes')
+         ORDER BY started_at ASC`,
+      )
+      .all({ minutes }) as CronTick[];
+  },
 };
 
 const rowToFollowup = (r: any): Followup => ({
