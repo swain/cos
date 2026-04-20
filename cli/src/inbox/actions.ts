@@ -9,6 +9,31 @@ import type { InboxDashboard, InboxItem } from "./types.js";
 const COS_BIN = join(COS_DIR, "bin/cos");
 const TMUX_WORKER_SESSION = "cos-workers";
 
+// `cos review` needs an interactive terminal (plannotator takes over stdio, then
+// we readline for the gh mirror). We can't inherit the inbox server's stdio, so
+// we ask Terminal.app to open a new window running the command. Darwin-only —
+// matches `cos dashboard`'s existing darwin gate.
+const openTerminalRunning = (command: string): boolean => {
+  if (process.platform !== "darwin") return false;
+  const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  try {
+    spawn(
+      "osascript",
+      ["-e", `tell application "Terminal" to do script "${escaped}"`],
+      { stdio: "ignore", detached: true },
+    ).unref();
+    spawn("osascript", ["-e", 'tell application "Terminal" to activate'], {
+      stdio: "ignore",
+      detached: true,
+    }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+
 const runCos = (args: string[]): Promise<{ ok: boolean; stderr: string }> =>
   new Promise((resolve) => {
     const child = spawn(COS_BIN, args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -330,24 +355,62 @@ export const markAllFyiRead = async (
   const fyi = Array.isArray(source)
     ? source.filter((i) => i.section === "fyi")
     : source.fyi;
-  const anomalies = Array.isArray(source)
-    ? source.filter((i) => i.section === "anomalies")
-    : source.anomalies;
   let dismissed = 0;
+  const ackSession = getDb().prepare(
+    `UPDATE sessions SET acked_at = datetime('now') WHERE id = ? AND acked_at IS NULL`,
+  );
   for (const item of fyi) {
     if (item.kind === "notification") {
       notifications.markPushed(item.id);
       dismissed++;
-    }
-  }
-  const stmt = getDb().prepare(
-    `UPDATE sessions SET acked_at = datetime('now') WHERE id = ? AND acked_at IS NULL`,
-  );
-  for (const item of anomalies) {
-    if (item.kind === "session") {
-      const r = stmt.run(item.id);
+    } else if (item.kind === "session") {
+      const r = ackSession.run(item.id);
       if (r.changes > 0) dismissed++;
     }
   }
-  return { ok: true, message: `dismissed ${dismissed} FYI / anomaly rows` };
+  return { ok: true, message: `dismissed ${dismissed} FYI rows` };
+};
+
+// Launches `cos review <pr-url>` in a new Terminal window. The user drives
+// plannotator there and, on exit, is prompted to mirror the decision to
+// GitHub via `gh pr review`. See cmdReviewPr in commands/review-pr.ts.
+export const reviewInPlannotator = async (
+  prUrl: string,
+): Promise<ActionResult> => {
+  if (!prUrl) return { ok: false, message: "no PR URL on this row" };
+  const cmd = `${shellQuote(COS_BIN)} review ${shellQuote(prUrl)}`;
+  if (!openTerminalRunning(cmd)) {
+    return {
+      ok: false,
+      message: `run manually: cos review ${prUrl}`,
+      detail: `run manually: cos review ${prUrl}`,
+    };
+  }
+  return {
+    ok: true,
+    message: `opened plannotator for ${prUrl}`,
+    detail: `running in new Terminal: cos review ${prUrl}`,
+  };
+};
+
+// Queue mode walks all open PRs sequentially — one plannotator at a time,
+// then the gh mirror prompt, then the next URL. Single Terminal window.
+export const startReviewQueue = async (
+  urls: string[],
+): Promise<ActionResult> => {
+  if (!urls.length) return { ok: false, message: "no PRs to review" };
+  const args = urls.map(shellQuote).join(" ");
+  const cmd = `${shellQuote(COS_BIN)} review ${args}`;
+  if (!openTerminalRunning(cmd)) {
+    return {
+      ok: false,
+      message: `run manually: cos review ${urls.join(" ")}`,
+      detail: `run manually: cos review ${urls.join(" ")}`,
+    };
+  }
+  return {
+    ok: true,
+    message: `opened review queue (${urls.length} PRs)`,
+    detail: `running in new Terminal: cos review ${urls.length} PR(s)`,
+  };
 };

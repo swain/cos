@@ -11,9 +11,11 @@ test("clicking an action preserves scroll position (does not jump to top)", asyn
   const ids: string[] = [];
   try {
     clearAll(db);
+    // Blocked items render in the Review section; they expose an "abandon"
+    // action that archives them — perfect for a scroll test.
     for (let i = 0; i < 10; i++) {
       ids.push(
-        seedWorkItem(db, { title: `queued-thing-${i}`, status: "queued" }),
+        seedWorkItem(db, { title: `blocked-thing-${i}`, status: "blocked" }),
       );
     }
   } finally {
@@ -23,14 +25,14 @@ test("clicking an action preserves scroll position (does not jump to top)", asyn
   await page.goto("/");
 
   const targetIdx = 6;
-  const targetSel = `#row-queue-item\\:${ids[targetIdx]}`;
+  const targetSel = `#row-blocked-item\\:${ids[targetIdx]}`;
   await page.locator(targetSel).scrollIntoViewIfNeeded();
   const scrollBefore = await page.evaluate(() => window.scrollY);
   expect(scrollBefore).toBeGreaterThan(100);
 
   await page
     .locator(targetSel)
-    .locator('form[action$="/archive"] button')
+    .locator('form[action$="/abandon"] button')
     .click();
 
   await expect(page.locator(targetSel)).toHaveCount(0);

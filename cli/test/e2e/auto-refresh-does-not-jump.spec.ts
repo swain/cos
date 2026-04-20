@@ -9,7 +9,10 @@ test("auto-refresh does not reset scroll position", async ({ page }) => {
   try {
     clearAll(db);
     for (let i = 0; i < 12; i++) {
-      seedWorkItem(db, { title: `queued-refresh-${i}`, status: "queued" });
+      seedWorkItem(db, {
+        title: `blocked-refresh-${i}`,
+        status: "blocked",
+      });
     }
   } finally {
     db.close();

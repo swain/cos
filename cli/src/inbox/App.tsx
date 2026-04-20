@@ -25,7 +25,9 @@ import {
   promoteIdea,
   retrySession,
   retryWorkItem,
+  reviewInPlannotator,
   snoozeWorkItem,
+  startReviewQueue,
   suppressSignal,
   viewFailureLog,
   type ActionResult,
@@ -40,7 +42,6 @@ import {
 } from "./types.js";
 
 const REFRESH_MS = 3000;
-const PER_SECTION_LIMIT = 5;
 
 const URGENCY_COLOR: Record<InboxItem["urgency"], string | undefined> = {
   urgent: "red",
@@ -48,10 +49,9 @@ const URGENCY_COLOR: Record<InboxItem["urgency"], string | undefined> = {
   digest: "gray",
 };
 
-const SECTION_COLOR: Partial<Record<Section, string>> = {
-  needsDecision: "red",
-  active: "green",
-  anomalies: "yellow",
+const SECTION_COLOR: Record<Section, string | undefined> = {
+  review: "red",
+  fyi: "gray",
 };
 
 const fmtTime = (iso: string): string => {
@@ -81,17 +81,14 @@ const openInBrowser = (url: string) => {
 
 type RenderedSection = {
   section: Section;
-  total: number;
-  visible: InboxItem[];
+  items: InboxItem[];
 };
 
 const buildSections = (dashboard: InboxDashboard): RenderedSection[] =>
-  SECTION_ORDER.map((section) => {
-    const all = dashboard[section];
-    const visible =
-      section === "needsDecision" ? all : all.slice(0, PER_SECTION_LIMIT);
-    return { section, total: all.length, visible };
-  });
+  SECTION_ORDER.map((section) => ({
+    section,
+    items: dashboard[section],
+  }));
 
 const ItemRow: React.FC<{ item: InboxItem; focused: boolean }> = ({
   item,
@@ -118,7 +115,13 @@ const ItemRow: React.FC<{ item: InboxItem; focused: boolean }> = ({
 
 const hintsFor = (item: InboxItem | null): string[] => {
   if (!item)
-    return ["[/] reply", "[m] mark FYI read", "[r] refresh", "[q] quit"];
+    return [
+      "[/] reply",
+      "[R] review queue",
+      "[m] mark FYI read",
+      "[r] refresh",
+      "[q] quit",
+    ];
   const hints: string[] = ["[↑↓] nav", "[/] reply"];
   switch (item.kind) {
     case "notification":
@@ -140,7 +143,7 @@ const hintsFor = (item: InboxItem | null): string[] => {
       hints.push("[D] dispatch", "[b] bump", "[x] archive");
       break;
     case "pr-review":
-      hints.push("[↵] open", "[v] mark reviewed");
+      hints.push("[P] plannotator", "[↵] open", "[v] mark reviewed");
       break;
     case "blocked-item":
       hints.push("[r] retry", "[l] log", "[x] abandon");
@@ -153,7 +156,7 @@ const hintsFor = (item: InboxItem | null): string[] => {
       break;
   }
   if (item.related_ids.some(looksLikeUrl)) hints.push("[↵] open url");
-  hints.push("[m] mark FYI read", "[?] help", "[q] quit");
+  hints.push("[R] review queue", "[m] mark FYI read", "[?] help", "[q] quit");
   return hints;
 };
 
@@ -188,33 +191,31 @@ const HelpOverlay: React.FC = () => (
       <Text color="cyan">Enter</Text> open related URL in $BROWSER
     </Text>
     <Text>
-      <Text color="cyan">a</Text> ack notification
+      <Text color="cyan">P</Text> review PR in plannotator (on a pr-review row)
+    </Text>
+    <Text>
+      <Text color="cyan">R</Text> start review queue (walk all open PRs)
+    </Text>
+    <Text>
+      <Text color="cyan">a</Text> ack notification / accept idea
     </Text>
     <Text>
       <Text color="cyan">A</Text> approve + dispatch work item
     </Text>
     <Text>
-      <Text color="cyan">D</Text> dispatch queued item
+      <Text color="cyan">d</Text> dismiss · <Text color="cyan">k</Text> kill ·{" "}
+      <Text color="cyan">r</Text> retry
     </Text>
     <Text>
-      <Text color="cyan">b</Text> bump priority (queue) ·{" "}
-      <Text color="cyan">s</Text> snooze (work-item)
-    </Text>
-    <Text>
-      <Text color="cyan">d</Text> dismiss (session/notification/recent-win) ·{" "}
-      <Text color="cyan">k</Text> kill (session/worker)
-    </Text>
-    <Text>
-      <Text color="cyan">r</Text> retry (session/blocked) ·{" "}
-      <Text color="cyan">p</Text> peek tmux · <Text color="cyan">l</Text>{" "}
-      failure log
+      <Text color="cyan">p</Text> peek/promote · <Text color="cyan">l</Text>{" "}
+      failure log · <Text color="cyan">f</Text> defer
     </Text>
     <Text>
       <Text color="cyan">v</Text> mark PR reviewed · <Text color="cyan">x</Text>{" "}
-      archive / abandon
+      archive / abandon · <Text color="cyan">s</Text> snooze
     </Text>
     <Text>
-      <Text color="cyan">m</Text> mark all FYI + anomalies read
+      <Text color="cyan">m</Text> mark all FYI read
     </Text>
     <Text>
       <Text color="cyan">?</Text> toggle this help · <Text color="cyan">q</Text>{" "}
@@ -255,6 +256,20 @@ const TickBanner: React.FC<{ tick: CronTickStatus }> = ({ tick }) => {
   );
 };
 
+const findPrUrl = (item: InboxItem): string | null => {
+  if (item.kind !== "pr-review") return null;
+  return item.related_ids.find((r) => /^https?:\/\//.test(r)) ?? null;
+};
+
+const findAllPrUrls = (dashboard: InboxDashboard): string[] => {
+  const urls: string[] = [];
+  for (const it of dashboard.review) {
+    const u = findPrUrl(it);
+    if (u) urls.push(u);
+  }
+  return urls;
+};
+
 export const App: React.FC = () => {
   const { exit } = useApp();
   const [dashboard, setDashboard] = useState<InboxDashboard>(() =>
@@ -284,7 +299,7 @@ export const App: React.FC = () => {
 
   const sections = useMemo(() => buildSections(dashboard), [dashboard]);
   const flatVisible = useMemo(
-    () => sections.flatMap((s) => s.visible),
+    () => sections.flatMap((s) => s.items),
     [sections],
   );
   const flatAll = useMemo(() => flattenDashboard(dashboard), [dashboard]);
@@ -382,6 +397,15 @@ export const App: React.FC = () => {
       applyResult(await markAllFyiRead(flatAll));
       return;
     }
+    if (input === "R") {
+      const urls = findAllPrUrls(dashboard);
+      if (!urls.length) {
+        flashStatus("no open PRs to review");
+        return;
+      }
+      applyResult(await startReviewQueue(urls));
+      return;
+    }
     if (input === "r" && !focusedItem) {
       refresh();
       flashStatus("refreshed", 1500);
@@ -437,10 +461,19 @@ export const App: React.FC = () => {
         if (input === "x")
           return applyResult(await archiveWorkItem(focusedItem.id));
         break;
-      case "pr-review":
+      case "pr-review": {
         if (input === "v")
           return applyResult(await markPrReviewed(focusedItem.id));
+        if (input === "P") {
+          const pr = findPrUrl(focusedItem);
+          if (!pr) {
+            flashStatus("no PR URL on this row");
+            return;
+          }
+          return applyResult(await reviewInPlannotator(pr));
+        }
         break;
+      }
       case "blocked-item":
         if (input === "r")
           return applyResult(await retryWorkItem(focusedItem.id));
@@ -485,6 +518,8 @@ export const App: React.FC = () => {
     );
   }
 
+  const recentWinsCount = dashboard.recentWins.length;
+
   return (
     <Box flexDirection="column" padding={1}>
       <Box justifyContent="space-between">
@@ -499,26 +534,41 @@ export const App: React.FC = () => {
         </Box>
       ) : (
         sections.map((section) => {
-          if (section.total === 0) return null;
-          const hidden = section.total - section.visible.length;
+          if (section.items.length === 0) return null;
           const color = SECTION_COLOR[section.section];
           return (
             <Box key={section.section} flexDirection="column" marginTop={1}>
               <Text bold color={color}>
-                {SECTION_TITLES[section.section]} ({section.total})
+                {SECTION_TITLES[section.section].toUpperCase()} (
+                {section.items.length})
               </Text>
-              {section.visible.map((item) => (
+              {section.items.map((item) => (
                 <ItemRow
                   key={item.key}
                   item={item}
                   focused={item.key === cursorKey}
                 />
               ))}
-              {hidden > 0 ? <Text color="gray"> +{hidden} more</Text> : null}
             </Box>
           );
         })
       )}
+      {recentWinsCount > 0 ? (
+        <Box marginTop={1}>
+          <Text color="gray">
+            + {recentWinsCount} shipped in last 24h (see web dashboard to
+            expand)
+          </Text>
+        </Box>
+      ) : null}
+      {dashboard.triagedIdeasCount > 0 ? (
+        <Box>
+          <Text color="gray">
+            + {dashboard.triagedIdeasCount} triaged ideas · run `cos ideas` to
+            browse
+          </Text>
+        </Box>
+      ) : null}
       <Footer focused={focusedItem} status={status} detail={detail} />
     </Box>
   );
