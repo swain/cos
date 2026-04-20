@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS followups (
 CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(status);
 CREATE INDEX IF NOT EXISTS idx_followups_trigger ON followups(trigger);
 
+CREATE TABLE IF NOT EXISTS meeting_prep_runs (
+  id             TEXT PRIMARY KEY,
+  event_id       TEXT NOT NULL,
+  slug           TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'running',
+  started_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at    TEXT,
+  exit_code      INTEGER,
+  prep_file_path TEXT,
+  error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_event ON meeting_prep_runs(event_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_status ON meeting_prep_runs(status);
+
 CREATE TABLE IF NOT EXISTS recurring_tasks (
   id             TEXT PRIMARY KEY,
   title          TEXT NOT NULL,

@@ -740,6 +740,112 @@ export const followups = {
   },
 };
 
+export type MeetingPrepRunStatus =
+  | "running"
+  | "ready"
+  | "no-prep-needed"
+  | "failed";
+
+export type MeetingPrepRun = {
+  id: string;
+  event_id: string;
+  slug: string;
+  status: MeetingPrepRunStatus;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  prep_file_path: string | null;
+  error: string | null;
+};
+
+const rowToMeetingPrepRun = (r: any): MeetingPrepRun => ({
+  id: r.id,
+  event_id: r.event_id,
+  slug: r.slug,
+  status: r.status,
+  started_at: r.started_at,
+  finished_at: r.finished_at ?? null,
+  exit_code: r.exit_code ?? null,
+  prep_file_path: r.prep_file_path ?? null,
+  error: r.error ?? null,
+});
+
+export const meetingPrepRuns = {
+  start(run: { id: string; event_id: string; slug: string }) {
+    getDb()
+      .prepare(
+        `INSERT INTO meeting_prep_runs (id, event_id, slug, status) VALUES (@id, @event_id, @slug, 'running')`,
+      )
+      .run(run);
+  },
+  finish(
+    id: string,
+    patch: {
+      status: MeetingPrepRunStatus;
+      exit_code?: number | null;
+      prep_file_path?: string | null;
+      error?: string | null;
+    },
+  ) {
+    getDb()
+      .prepare(
+        `UPDATE meeting_prep_runs
+           SET status = @status,
+               finished_at = datetime('now'),
+               exit_code = @exit_code,
+               prep_file_path = @prep_file_path,
+               error = @error
+         WHERE id = @id`,
+      )
+      .run({
+        id,
+        status: patch.status,
+        exit_code: patch.exit_code ?? null,
+        prep_file_path: patch.prep_file_path ?? null,
+        error: patch.error ?? null,
+      });
+  },
+  latestForEvent(eventId: string): MeetingPrepRun | null {
+    const r = getDb()
+      .prepare(
+        `SELECT * FROM meeting_prep_runs WHERE event_id = ? ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(eventId) as any;
+    return r ? rowToMeetingPrepRun(r) : null;
+  },
+  latestForEvents(eventIds: string[]): Map<string, MeetingPrepRun> {
+    const out = new Map<string, MeetingPrepRun>();
+    if (!eventIds.length) return out;
+    const rows = getDb()
+      .prepare(
+        `SELECT r.* FROM meeting_prep_runs r
+         JOIN (
+           SELECT event_id, MAX(started_at) AS latest
+           FROM meeting_prep_runs GROUP BY event_id
+         ) latest ON latest.event_id = r.event_id AND latest.latest = r.started_at`,
+      )
+      .all() as any[];
+    const wanted = new Set(eventIds);
+    for (const r of rows) {
+      if (!wanted.has(r.event_id)) continue;
+      out.set(r.event_id, rowToMeetingPrepRun(r));
+    }
+    return out;
+  },
+  // Active runs the parent is still shepherding. The caller walks these at
+  // startup to decide whether to mark them failed (parent restart killed the
+  // child) or adopt them (file landed while we were gone).
+  listRunning(): MeetingPrepRun[] {
+    return (
+      getDb()
+        .prepare(
+          `SELECT * FROM meeting_prep_runs WHERE status = 'running' ORDER BY started_at ASC`,
+        )
+        .all() as any[]
+    ).map(rowToMeetingPrepRun);
+  },
+};
+
 export const kv = {
   get(key: string): string | null {
     const r = getDb()

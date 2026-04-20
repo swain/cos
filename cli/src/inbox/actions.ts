@@ -2,10 +2,25 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "ulid";
-import { getDb, ideas, notifications, sessions, workItems } from "../db.js";
+import {
+  getDb,
+  ideas,
+  meetingPrepRuns,
+  notifications,
+  sessions,
+  workItems,
+} from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
-import { COS_DIR, displayWorkItemId, tmuxWindowName } from "../util.js";
-import { invalidateUpcomingCache } from "./upcoming.js";
+import {
+  COS_DIR,
+  displayWorkItemId,
+  MEETINGS_DIR,
+  tmuxWindowName,
+} from "../util.js";
+import {
+  findUpcomingMeetingById,
+  invalidateUpcomingCache,
+} from "./upcoming.js";
 import type { InboxDashboard, InboxItem } from "./types.js";
 
 const COS_BIN = join(COS_DIR, "bin/cos");
@@ -373,27 +388,165 @@ export const markAllFyiRead = async (
   return { ok: true, message: `dismissed ${dismissed} FYI rows` };
 };
 
-// Kicks off an ad-hoc calendar prep for a single event via
-// `cos collect-calendar --event-id <id>`. The collector subprocess itself
-// takes ~2-3 minutes (it spawns claude -p), so we detach and return
-// immediately; the user's next dashboard refresh will pick up the
-// prep-ready/prep-pending state once the collector writes its file or
-// signal.
+// Ad-hoc calendar prep for a single event. The collector subprocess runs
+// ~30-180s (it spawns `claude -p` internally), so we spawn async and return
+// immediately. Before returning we insert a `meeting_prep_runs` row with
+// status=running so the dashboard's next render flips the badge to yellow
+// without having to wait for the child to finish.
+//
+// We keep a one-shot exit listener on the child to reconcile the run row
+// on the way out: collector stdout is scanned for the `no-prep-needed`
+// sentinel, stderr is tail-clipped for failure messaging, and the prep
+// file path is checked on disk. If the inbox server is restarted before
+// the child exits, reconcileOrphanedPrepRuns() (called at server boot)
+// sweeps the row to `failed` — "timeout (server restarted)".
+//
+// We cap the collector's wall time at 5 min. Claude-p occasionally stalls
+// on MCP auth and we'd rather surface a failure than a silently-stuck
+// yellow badge.
+const PREP_COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;
+const NO_PREP_SENTINEL = "no-prep-needed";
+
+const lastNonEmptyLines = (s: string, n: number): string => {
+  const lines = s.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  return lines.slice(-n).join("\n");
+};
+
 export const prepMeetingNow = async (
   eventId: string,
 ): Promise<ActionResult> => {
   if (!eventId) return { ok: false, message: "no event id" };
+
+  // If there's already a running row for this event, don't spawn a duplicate —
+  // just return ok so the UI stays responsive. The badge is already yellow.
+  const existing = meetingPrepRuns.latestForEvent(eventId);
+  if (existing && existing.status === "running") {
+    return { ok: true, message: `prep already running for ${eventId}` };
+  }
+
+  const upcoming = findUpcomingMeetingById(eventId);
+  const slug = upcoming?.prepSlug ?? eventId;
+  const runId = `mpr-${ulid()}`;
+  meetingPrepRuns.start({ id: runId, event_id: eventId, slug });
+
+  let child;
   try {
-    const child = spawn(COS_BIN, ["collect-calendar", "--event-id", eventId], {
-      stdio: "ignore",
+    child = spawn(COS_BIN, ["collect-calendar", "--event-id", eventId], {
+      stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
-    child.unref();
   } catch (e) {
+    meetingPrepRuns.finish(runId, {
+      status: "failed",
+      error: `failed to spawn collector: ${String(e)}`,
+    });
+    invalidateUpcomingCache();
     return { ok: false, message: `failed to spawn collector: ${String(e)}` };
   }
+
+  // Detached + unref so the child keeps running if the parent exits for a
+  // deploy; the reconcile sweep handles the orphan case on next boot.
+  child.unref();
+
+  let stdoutBuf = "";
+  let stderrBuf = "";
+  const BUF_CAP = 32_000;
+  child.stdout?.on("data", (chunk) => {
+    if (stdoutBuf.length < BUF_CAP) stdoutBuf += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk) => {
+    if (stderrBuf.length < BUF_CAP) stderrBuf += chunk.toString();
+  });
+
+  const timeoutHandle = setTimeout(() => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // child already exited — exit handler will still run
+    }
+  }, PREP_COLLECTOR_TIMEOUT_MS);
+  timeoutHandle.unref();
+
+  const settle = (status: "ready" | "no-prep-needed" | "failed") => {
+    const prepPath = `${MEETINGS_DIR}/${slug}.md`;
+    const hasFile = existsSync(prepPath);
+    const tail = (s: string) => lastNonEmptyLines(s, 3) || null;
+    if (status === "ready" && !hasFile) {
+      // Collector claims success but no file — treat as failed so the user
+      // can retry instead of staring at a green badge with no payload.
+      meetingPrepRuns.finish(runId, {
+        status: "failed",
+        exit_code: 0,
+        error: "collector finished with exit 0 but no prep file was written",
+      });
+    } else if (status === "ready") {
+      meetingPrepRuns.finish(runId, {
+        status: "ready",
+        exit_code: 0,
+        prep_file_path: prepPath,
+      });
+    } else if (status === "no-prep-needed") {
+      meetingPrepRuns.finish(runId, {
+        status: "no-prep-needed",
+        exit_code: 0,
+      });
+    } else {
+      meetingPrepRuns.finish(runId, {
+        status: "failed",
+        exit_code: null,
+        error: tail(stderrBuf) ?? tail(stdoutBuf) ?? "collector failed",
+      });
+    }
+    invalidateUpcomingCache();
+  };
+
+  child.once("exit", (code, sig) => {
+    clearTimeout(timeoutHandle);
+    const combined = stdoutBuf + "\n" + stderrBuf;
+    const sawNoPrep = combined.toLowerCase().includes(NO_PREP_SENTINEL);
+    if (sig === "SIGTERM") {
+      meetingPrepRuns.finish(runId, {
+        status: "failed",
+        exit_code: code,
+        error: `timed out after ${PREP_COLLECTOR_TIMEOUT_MS / 1000}s`,
+      });
+      invalidateUpcomingCache();
+      return;
+    }
+    if (code !== 0) {
+      settle("failed");
+      return;
+    }
+    settle(sawNoPrep ? "no-prep-needed" : "ready");
+  });
+  child.once("error", (err) => {
+    clearTimeout(timeoutHandle);
+    meetingPrepRuns.finish(runId, {
+      status: "failed",
+      error: `spawn error: ${String(err)}`,
+    });
+    invalidateUpcomingCache();
+  });
+
   invalidateUpcomingCache();
   return { ok: true, message: `queued prep for ${eventId}` };
+};
+
+// Walked at inbox-serve boot. Any `meeting_prep_runs` row still marked
+// running belongs to a child that died with its parent — launchd kickstart
+// after a merge, OS reboot, etc. Marks them failed so the dashboard doesn't
+// paint a stuck yellow badge forever. Intentionally does not look at the
+// filesystem: if the file landed post-exit, the prep-ready rule
+// (file-on-disk wins) in upcoming.ts already takes precedence.
+export const reconcileOrphanedPrepRuns = (): number => {
+  const running = meetingPrepRuns.listRunning();
+  for (const r of running) {
+    meetingPrepRuns.finish(r.id, {
+      status: "failed",
+      error: "collector orphaned (inbox-serve restarted before child exited)",
+    });
+  }
+  return running.length;
 };
 
 // Opens the prep .md file in the user's default macOS handler. darwin-only.

@@ -1,9 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { basename, join } from "node:path";
 import chalk from "chalk";
 import { getDb } from "../db.js";
-import { COS_DIR } from "../util.js";
+import { COS_DIR, MEETINGS_DIR } from "../util.js";
 import {
   collectDashboard,
   getCronTickStatus,
@@ -28,6 +28,7 @@ import {
   peekSession,
   prepMeetingNow,
   promoteIdea,
+  reconcileOrphanedPrepRuns,
   retrySession,
   retryWorkItem,
   reviewInPlannotator,
@@ -42,7 +43,10 @@ import {
   type InboxDashboard,
   type InboxItem,
 } from "../inbox/types.js";
-import { invalidateUpcomingCache } from "../inbox/upcoming.js";
+import {
+  findUpcomingMeetingById,
+  invalidateUpcomingCache,
+} from "../inbox/upcoming.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.COS_INBOX_PORT) || 4411;
@@ -117,6 +121,110 @@ const getPoBioHtml = (): string => {
     poBioHtmlCache = `<p>Po's bio is missing at <code>${escapeHtml(PO_MD_PATH)}</code>.</p>`;
   }
   return poBioHtmlCache;
+};
+
+// Meeting prep markdown → HTML. A little richer than renderBioMarkdown —
+// prep files use link syntax and fenced code blocks, which the bio does not.
+// Still intentionally minimal: no syntax highlighting, no tables, no raw
+// HTML pass-through.
+const renderPrepMarkdown = (md: string): string => {
+  const lines = md.split(/\r?\n/);
+  const out: string[] = [];
+  let inList = false;
+  let inOrdered = false;
+  let inCode = false;
+  let codeBuf: string[] = [];
+  const closeList = () => {
+    if (inList) {
+      out.push("</ul>");
+      inList = false;
+    }
+    if (inOrdered) {
+      out.push("</ol>");
+      inOrdered = false;
+    }
+  };
+  const inline = (s: string): string =>
+    escapeHtml(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(
+        /\[([^\]]+)\]\(([^)]+)\)/g,
+        (_m, label, href) =>
+          `<a href="${href}" target="_blank" rel="noopener">${label}</a>`,
+      );
+
+  for (const line of lines) {
+    if (/^```/.test(line)) {
+      if (inCode) {
+        out.push(`<pre><code>${escapeHtml(codeBuf.join("\n"))}</code></pre>`);
+        codeBuf = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuf.push(line);
+      continue;
+    }
+    const h = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (h) {
+      closeList();
+      const level = Math.min(h[1].length, 6);
+      out.push(`<h${level}>${inline(h[2])}</h${level}>`);
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      closeList();
+      out.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    const ol = /^\d+\.\s+(.+)$/.exec(line);
+    if (ol) {
+      if (inList) {
+        out.push("</ul>");
+        inList = false;
+      }
+      if (!inOrdered) {
+        out.push("<ol>");
+        inOrdered = true;
+      }
+      out.push(`<li>${inline(ol[1])}</li>`);
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      if (inOrdered) {
+        out.push("</ol>");
+        inOrdered = false;
+      }
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inline(line.replace(/^[-*]\s+/, ""))}</li>`);
+      continue;
+    }
+    if (/^---+$/.test(line.trim())) {
+      closeList();
+      out.push("<hr>");
+      continue;
+    }
+    if (line.trim() === "") {
+      closeList();
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  if (inCode) {
+    out.push(`<pre><code>${escapeHtml(codeBuf.join("\n"))}</code></pre>`);
+  }
+  return out.join("\n");
 };
 
 const escapeHtml = (s: string): string =>
@@ -740,18 +848,88 @@ body {
 }
 .prep-badge--ready { color: var(--green-fg); background: var(--green-bg); border-color: var(--green); }
 .prep-badge--pending { color: var(--amber); background: var(--amber-bg); border-color: var(--amber); }
+.prep-badge--failed { color: var(--red); background: var(--red-bg); border-color: var(--red); }
+.prep-badge--skipped { color: var(--muted); background: var(--paper); border-color: var(--rule-strong); font-style: italic; }
 .prep-badge--none { color: var(--muted); background: var(--paper); border-color: var(--rule-strong); }
+.prep-badge .prep-icon {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 4px;
+  width: 10px;
+  height: 10px;
+}
+.prep-badge--pending .prep-icon {
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: prep-spin 0.9s linear infinite;
+}
+.prep-badge--skipped .prep-icon::before {
+  content: "◷";
+  display: block;
+  line-height: 10px;
+  font-size: 12px;
+  margin-top: -2px;
+  font-style: normal;
+}
+@keyframes prep-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Prep-pending primary button: disabled shell with inline spinner glyph. */
+.btn--prep-pending {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-bg);
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn--prep-pending::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: prep-spin 0.9s linear infinite;
+}
+
+.card__prep-error {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--red);
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+.card__prep-skipped-note {
+  margin-top: 6px;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card--upcoming-failed { border-left-color: var(--red); }
+.card--upcoming-skipped { border-left-color: var(--muted-2); }
 
 /* ----- Upcoming: compact glance-widget rows ----- */
 .card--upcoming,
 .card--upcoming-ready,
-.card--upcoming-pending {
+.card--upcoming-pending,
+.card--upcoming-failed,
+.card--upcoming-skipped {
   padding: 10px 12px;
   margin-bottom: 8px;
 }
 .card--upcoming .card__subject,
 .card--upcoming-ready .card__subject,
-.card--upcoming-pending .card__subject {
+.card--upcoming-pending .card__subject,
+.card--upcoming-failed .card__subject,
+.card--upcoming-skipped .card__subject {
   font-size: 13.5px;
   line-height: 1.35;
   white-space: nowrap;
@@ -761,7 +939,9 @@ body {
 }
 .card--upcoming .card__meta,
 .card--upcoming-ready .card__meta,
-.card--upcoming-pending .card__meta {
+.card--upcoming-pending .card__meta,
+.card--upcoming-failed .card__meta,
+.card--upcoming-skipped .card__meta {
   margin-top: 6px;
   gap: 10px;
   font-size: 10.5px;
@@ -1096,15 +1276,98 @@ const renderReviewSection = (items: InboxItem[]): string => {
   return `<section class="section section--review" id="section-review">${head}${body}</section>`;
 };
 
+type PrepVariant =
+  | "prep-ready"
+  | "prep-running"
+  | "prep-failed"
+  | "no-prep-needed"
+  | "no-prep";
+
+const PREP_VARIANT_UI: Record<
+  PrepVariant,
+  { badgeLabel: string; badgeCls: string; accent: string; icon: string }
+> = {
+  "prep-ready": {
+    badgeLabel: "prep ready",
+    badgeCls: "prep-badge prep-badge--ready",
+    accent: "card--upcoming-ready",
+    icon: "",
+  },
+  "prep-running": {
+    badgeLabel: "prep running",
+    badgeCls: "prep-badge prep-badge--pending",
+    accent: "card--upcoming-pending",
+    icon: '<span class="prep-icon" aria-hidden="true"></span>',
+  },
+  "prep-failed": {
+    badgeLabel: "prep failed",
+    badgeCls: "prep-badge prep-badge--failed",
+    accent: "card--upcoming-failed",
+    icon: "",
+  },
+  "no-prep-needed": {
+    badgeLabel: "no prep needed",
+    badgeCls: "prep-badge prep-badge--skipped",
+    accent: "card--upcoming-skipped",
+    icon: '<span class="prep-icon" aria-hidden="true"></span>',
+  },
+  "no-prep": {
+    badgeLabel: "no prep",
+    badgeCls: "prep-badge prep-badge--none",
+    accent: "card--upcoming",
+    icon: "",
+  },
+};
+
+const coercePrepVariant = (v: string): PrepVariant => {
+  switch (v) {
+    case "prep-ready":
+    case "prep-running":
+    case "prep-failed":
+    case "no-prep-needed":
+    case "no-prep":
+      return v;
+    // Legacy alias from before wi-63 — collapse to the new running state.
+    case "prep-pending":
+      return "prep-running";
+    default:
+      return "no-prep";
+  }
+};
+
+// Builds the one-primary-action CTA for the row. The glanceable widget
+// shows exactly one CTA per state:
+//   - ready         → Open prep (new tab, rendered markdown)
+//   - running       → disabled "Prep running…" with spinner
+//   - failed        → Retry (POST prep-now)
+//   - no-prep-needed → none (labeled "Solo meeting" inline instead)
+//   - no-prep       → Prep now (POST prep-now)
+const renderPrepPrimary = (
+  variant: PrepVariant,
+  eventId: string,
+  returnTo: string,
+): string => {
+  const id = encodeURIComponent(eventId);
+  switch (variant) {
+    case "prep-ready":
+      return `<a class="btn btn--primary" href="/meetings/${id}/prep" target="_blank" rel="noopener">Open prep</a>`;
+    case "prep-running":
+      return `<button class="btn btn--prep-pending" disabled aria-disabled="true">Prep running…</button>`;
+    case "prep-failed":
+      return `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">Retry</button></form>`;
+    case "no-prep-needed":
+      return "";
+    case "no-prep":
+      return `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">Prep now</button></form>`;
+  }
+};
+
 const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
   const meta = item.meta ?? {};
   const relative = String(meta.relative ?? "");
   const absolute = String(meta.absolute ?? "");
   const attendees = Number(meta.attendees ?? 0);
-  const prepStatus = String(meta.prepStatus ?? "no-prep") as
-    | "prep-ready"
-    | "prep-pending"
-    | "no-prep";
+  const variant = coercePrepVariant(String(meta.prepStatus ?? "no-prep"));
   const prepPath =
     meta.prepPath === null || meta.prepPath === undefined
       ? ""
@@ -1113,47 +1376,54 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
     meta.hangoutLink === null || meta.hangoutLink === undefined
       ? ""
       : String(meta.hangoutLink);
+  const prepError =
+    meta.prepError === null || meta.prepError === undefined
+      ? ""
+      : String(meta.prepError);
 
-  const badgeLabel = prepStatus
-    .replace("prep-", "prep ")
-    .replace("no prep", "no prep");
-  const badgeCls =
-    prepStatus === "prep-ready"
-      ? "prep-badge prep-badge--ready"
-      : prepStatus === "prep-pending"
-        ? "prep-badge prep-badge--pending"
-        : "prep-badge prep-badge--none";
-  const accent =
-    prepStatus === "prep-ready"
-      ? "card--upcoming-ready"
-      : prepStatus === "prep-pending"
-        ? "card--upcoming-pending"
-        : "card--upcoming";
-  const id = encodeURIComponent(item.id);
-  // One primary action, inline. "Open prep" when the file is ready, otherwise
-  // "Prep now" / "Refresh prep". The glanceable widget shows exactly one CTA.
-  const primaryBtn =
-    prepPath && prepStatus === "prep-ready"
-      ? `<form method="post" action="/meetings/${id}/open-prep">${hiddenReturn(returnTo)}<input type="hidden" name="prepPath" value="${escapeHtml(prepPath)}"><button class="btn btn--primary">Open prep</button></form>`
-      : `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">${prepStatus === "prep-pending" ? "Refresh prep" : "Prep now"}</button></form>`;
-  // Hangout link is a secondary — tucked in an overflow menu instead of
-  // cluttering the inline row.
-  const overflowMenu = hangoutLink
-    ? `<details class="overflow"><summary title="more">⋯</summary><div class="overflow__menu"><a class="btn btn--muted" href="${escapeHtml(hangoutLink)}" target="_blank" rel="noopener">Join meeting</a></div></details>`
+  const ui = PREP_VARIANT_UI[variant];
+  const primaryBtn = renderPrepPrimary(variant, item.id, returnTo);
+
+  // Overflow menu holds the secondary "Open in default app" and "Join meeting"
+  // actions so the inline row stays a one-CTA glance.
+  const overflowItems: string[] = [];
+  if (hangoutLink) {
+    overflowItems.push(
+      `<a class="btn btn--muted" href="${escapeHtml(hangoutLink)}" target="_blank" rel="noopener">Join meeting</a>`,
+    );
+  }
+  if (variant === "prep-ready" && prepPath) {
+    overflowItems.push(
+      `<form method="post" action="/meetings/${encodeURIComponent(item.id)}/open-prep">${hiddenReturn(returnTo)}<input type="hidden" name="prepPath" value="${escapeHtml(prepPath)}"><button class="btn btn--muted">Open in default app</button></form>`,
+    );
+  }
+  const overflowMenu = overflowItems.length
+    ? `<details class="overflow"><summary title="more">⋯</summary><div class="overflow__menu">${overflowItems.join("")}</div></details>`
     : "";
   const attendeeLabel =
     attendees === 1 ? "1 attendee" : `${attendees} attendees`;
 
+  const errorLine =
+    variant === "prep-failed" && prepError
+      ? `<div class="card__prep-error">${escapeHtml(prepError)}</div>`
+      : "";
+  const skippedNote =
+    variant === "no-prep-needed"
+      ? `<div class="card__prep-skipped-note">Solo meeting — no prep generated.</div>`
+      : "";
+
   return `
-<article class="card ${accent}" id="row-${escapeHtml(item.key)}">
+<article class="card ${ui.accent}" id="row-${escapeHtml(item.key)}">
   <div class="card__head">
     <div class="card__body">
       <div class="card__subject"><span class="card__when">${escapeHtml(relative)}</span>${escapeHtml(item.subject)}</div>
       <div class="card__meta">
-        <span class="${badgeCls}">${escapeHtml(badgeLabel)}</span>
+        <span class="${ui.badgeCls}">${ui.icon}${escapeHtml(ui.badgeLabel)}</span>
         <span>${escapeHtml(absolute)}</span>
         <span>${escapeHtml(attendeeLabel)}</span>
       </div>
+      ${errorLine}
+      ${skippedNote}
     </div>
     <div class="actions">${primaryBtn}${overflowMenu}</div>
   </div>
@@ -1399,6 +1669,123 @@ const safeReturn = (v: string | undefined): string => {
 const finish = (res: ServerResponse, r: ActionResult, returnTo = "/") =>
   r.ok ? sendRedirect(res, returnTo) : sendText(res, 500, r.message);
 
+// Renders the prep markdown for an event id as a standalone HTML page. The
+// markdown filename (<yyyy-mm-dd>-<slug>.md) is computed from the live
+// UpcomingMeeting row so users can't read arbitrary paths off MEETINGS_DIR
+// by guessing file names.
+const renderPrepPage = (eventId: string): { code: number; html: string } => {
+  const meeting = findUpcomingMeetingById(eventId);
+  if (!meeting) {
+    return {
+      code: 404,
+      html: `<!doctype html><meta charset=utf-8><title>Prep not found</title><p>No meeting with id <code>${escapeHtml(eventId)}</code> in the current 8h window.</p>`,
+    };
+  }
+  const path = `${MEETINGS_DIR}/${basename(meeting.prepSlug)}.md`;
+  if (!existsSync(path)) {
+    return {
+      code: 404,
+      html: `<!doctype html><meta charset=utf-8><title>Prep not found</title><p>No prep file at <code>${escapeHtml(path)}</code>.</p>`,
+    };
+  }
+  const md = readFileSync(path, "utf8");
+  const body = renderPrepMarkdown(md);
+  return {
+    code: 200,
+    html: `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(meeting.summary)} — prep</title>
+<style>${styles}
+/* Prep-view overrides: give the prose a readable measure and editorial
+ * heading rhythm. The base styles assume a dashboard density that would
+ * feel cramped as long-form content. */
+body { max-width: 720px; padding-top: 40px; padding-bottom: 120px; }
+.prep-view { color: var(--fg-soft); font-size: 15px; line-height: 1.7; }
+.prep-view h1 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 1.1;
+  color: var(--fg);
+  margin: 0 0 8px;
+}
+.prep-view h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--fg);
+  margin: 28px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.prep-view h3 { font-family: var(--font-display); font-weight: 600; font-size: 17px; color: var(--fg); margin: 22px 0 8px; }
+.prep-view p { margin: 0 0 12px; }
+.prep-view ul, .prep-view ol { margin: 0 0 14px; padding-left: 22px; }
+.prep-view li { margin-bottom: 6px; }
+.prep-view strong { color: var(--fg); }
+.prep-view code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 5px;
+  background: var(--rule);
+  border-radius: 3px;
+  color: var(--fg);
+}
+.prep-view pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--rule);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.prep-view pre code { padding: 0; background: transparent; font-size: inherit; }
+.prep-view blockquote {
+  margin: 16px 0;
+  padding: 4px 18px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.prep-view hr { border: 0; border-top: 1px solid var(--rule-strong); margin: 32px 0; }
+.prep-view a { color: var(--accent); }
+.prep-back {
+  display: inline-block;
+  margin-bottom: 24px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+}
+.prep-back:hover { color: var(--accent); }
+.prep-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  margin: 0 0 28px;
+}
+</style>
+</head>
+<body>
+<a class="prep-back" href="/">← Inbox</a>
+<p class="prep-meta">${escapeHtml(path)}</p>
+<article class="prep-view">${body}</article>
+</body>
+</html>`,
+  };
+};
+
 const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const method = req.method ?? "GET";
   const url = req.url ?? "/";
@@ -1412,6 +1799,15 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "GET" && path === "/healthz") {
       sendText(res, 200, "ok");
+      return;
+    }
+    const prepGet =
+      method === "GET" && path.match(/^\/meetings\/([^/]+)\/prep$/);
+    if (prepGet) {
+      const eventId = decodeURIComponent(prepGet[1]);
+      const page = renderPrepPage(eventId);
+      res.writeHead(page.code, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(page.html);
       return;
     }
     if (method !== "POST") {
@@ -1557,6 +1953,11 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
 
 export const cmdInboxServe = () => {
   getDb();
+  // Orphaned runs from the previous instance become "failed (server
+  // restarted)" so the dashboard doesn't paint a perma-yellow badge.
+  const orphans = reconcileOrphanedPrepRuns();
+  if (orphans)
+    console.log(chalk.gray(`reconciled ${orphans} orphaned prep run(s)`));
   const server = createServer((req, res) => {
     void handle(req, res);
   });
