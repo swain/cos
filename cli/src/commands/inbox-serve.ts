@@ -993,6 +993,34 @@ body {
   white-space: nowrap;
 }
 
+/* Empty-state card: compact Po signoff. Same visual weight as a single
+ * meeting row so the right rail doesn't balloon when the calendar is clear. */
+.card--upcoming-empty {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--muted-2);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}
+.card--upcoming-empty__quip {
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--fg-soft);
+  font-style: italic;
+  letter-spacing: -0.003em;
+}
+.card--upcoming-empty__sig {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
 .upcoming-more {
   margin-top: 4px;
   padding: 8px 12px;
@@ -1458,16 +1486,29 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
 
 const UPCOMING_VISIBLE_LIMIT = 5;
 
+const renderUpcomingEmptyCard = (item: InboxItem): string => `
+<article class="card card--upcoming-empty" id="row-${escapeHtml(item.key)}">
+  <div class="card--upcoming-empty__quip">${escapeHtml(item.subject)}</div>
+  <div class="card--upcoming-empty__sig">— Po</div>
+</article>`;
+
 const renderUpcomingSection = (items: InboxItem[]): string => {
   if (!items.length) return "";
+  const isEmptyState = items.length === 1 && items[0].kind === "upcoming-empty";
+  const countLabel = isEmptyState
+    ? "clear"
+    : `${items.length} ${items.length === 1 ? "meeting" : "meetings"}`;
   const head = `<div class="section__head">
       <div>
         <h2 class="section__title">${SECTION_TITLES.upcoming}</h2>
       </div>
       <div class="section__head-actions">
-        <span class="section__count">${items.length} ${items.length === 1 ? "meeting" : "meetings"}</span>
+        <span class="section__count">${countLabel}</span>
       </div>
     </div>`;
+  if (isEmptyState) {
+    return `<section class="section section--upcoming" id="section-upcoming">${head}${renderUpcomingEmptyCard(items[0])}</section>`;
+  }
   // Compact mode: first N visible, rest behind a "Show all" disclosure so the
   // sticky rail stays glanceable even when the full calendar has more.
   const visibleItems = items.slice(0, UPCOMING_VISIBLE_LIMIT);

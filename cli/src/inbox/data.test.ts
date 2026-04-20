@@ -7,7 +7,11 @@ import { ulid } from "ulid";
 const tmp = mkdtempSync(join(tmpdir(), "cos-inbox-data-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
-import { collectDashboard, collectIdeasStats } from "./data.js";
+import {
+  collectDashboard,
+  collectIdeasStats,
+  UPCOMING_EMPTY_QUIPS,
+} from "./data.js";
 import {
   acceptAllSuggestKill,
   acceptIdea,
@@ -172,6 +176,29 @@ describe("review section — ideas verdict + blocked + pr-open", () => {
         (i) => i.id === id && i.kind === "blocked-item",
       ),
     ).toBe(true);
+  });
+});
+
+describe("upcoming empty state — synthetic Po signoff card", () => {
+  it("injects an upcoming-empty item when review has content and calendar is empty", () => {
+    insertWi({ title: "blocked one", status: "blocked" });
+    const d = collectDashboard();
+    expect(d.upcoming).toHaveLength(1);
+    expect(d.upcoming[0].kind).toBe("upcoming-empty");
+    expect(UPCOMING_EMPTY_QUIPS).toContain(d.upcoming[0].subject);
+  });
+
+  it("does not inject when nothing else has content (zero-state covers it)", () => {
+    expect(collectDashboard().upcoming).toHaveLength(0);
+  });
+
+  it("has at least 10 quips, all ≤100 chars, no emoji / exclamation", () => {
+    expect(UPCOMING_EMPTY_QUIPS.length).toBeGreaterThanOrEqual(10);
+    for (const q of UPCOMING_EMPTY_QUIPS) {
+      expect(q.length).toBeLessThanOrEqual(100);
+      expect(q).not.toMatch(/!/);
+      expect(q).not.toMatch(/\p{Extended_Pictographic}/u);
+    }
   });
 });
 

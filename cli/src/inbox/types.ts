@@ -18,7 +18,8 @@ export type ItemKind =
   | "blocked-item"
   | "recent-win"
   | "idea"
-  | "upcoming-meeting";
+  | "upcoming-meeting"
+  | "upcoming-empty";
 
 export type IdeaMeta = {
   verdict: TriageVerdict;
