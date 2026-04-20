@@ -1,14 +1,9 @@
 import type { Urgency, TriageVerdict } from "../types.js";
 
-export type Section =
-  | "needsDecision"
-  | "active"
-  | "queue"
-  | "ideas"
-  | "recentWins"
-  | "anomalies"
-  | "fyi"
-  | "digest";
+// Top-level dashboard surface is two sections:
+// - Review: things that block the user's attention
+// - FYI: things the user can glance at or ignore
+export type Section = "review" | "fyi";
 
 export type ItemKind =
   | "notification"
@@ -51,50 +46,41 @@ export type InboxItem = {
   ideaMeta?: IdeaMeta;
 };
 
+// Dashboard is two visible sections + two sidecars:
+// - recentWins: rendered collapsed inside FYI ("N shipped in last 24h")
+// - triagedIdeasCount: shown as a muted "N triaged ideas — browse" line
+//   so the sweep of suggest-promote/suggest-kill verdicts is one click away
+//   without crowding the attention surface
 export type InboxDashboard = {
-  needsDecision: InboxItem[];
-  active: InboxItem[];
-  queue: InboxItem[];
-  ideas: InboxItem[];
-  recentWins: InboxItem[];
-  anomalies: InboxItem[];
+  review: InboxItem[];
   fyi: InboxItem[];
-  digest: InboxItem[];
+  recentWins: InboxItem[];
+  triagedIdeasCount: number;
 };
 
-// IDEAS section state: how many are scored vs unscored and the top-N cap.
-// Separate from InboxDashboard so the renderer can show "show N more" with
-// both the trimmed count and the unscored-awaiting-triage count.
 export type IdeasSectionStats = {
   topN: number;
   scoredTotal: number;
   unscoredTotal: number;
 };
 
-export const SECTION_ORDER: Section[] = [
-  "needsDecision",
-  "active",
-  "queue",
-  "ideas",
-  "recentWins",
-  "anomalies",
-  "fyi",
-  "digest",
-];
+export const SECTION_ORDER: Section[] = ["review", "fyi"];
 
 export const SECTION_TITLES: Record<Section, string> = {
-  needsDecision: "NEEDS DECISION",
-  active: "ACTIVE",
-  queue: "QUEUE",
-  ideas: "IDEAS",
-  recentWins: "RECENT WINS",
-  anomalies: "ANOMALIES",
+  review: "Review",
   fyi: "FYI",
-  digest: "DIGEST",
 };
 
 export const SECTION_LIMIT = 10;
 export const IDEAS_TOP_N = 8;
 
-export const flattenDashboard = (d: InboxDashboard): InboxItem[] =>
-  SECTION_ORDER.flatMap((s) => d[s]);
+// FYI items older than this disappear from the surface automatically.
+// Manual mark-read still works — this is the fallback for rows the user
+// never touched.
+export const FYI_AUTO_READ_MS = 3 * 24 * 60 * 60 * 1000;
+
+export const flattenDashboard = (d: InboxDashboard): InboxItem[] => [
+  ...d.review,
+  ...d.fyi,
+  ...d.recentWins,
+];

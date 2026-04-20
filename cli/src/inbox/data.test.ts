@@ -119,7 +119,7 @@ describe("recentWinItems respects inbox_acked_at", () => {
   });
 });
 
-describe("anomalyItems respects sessions.acked_at", () => {
+describe("fyi section — anomalies fold in and respect acked_at", () => {
   it("hides a failed session after dismiss", async () => {
     const sessId = `sess-${ulid()}`;
     sessions.insert({
@@ -132,53 +132,51 @@ describe("anomalyItems respects sessions.acked_at", () => {
       notes: "boom",
     });
 
-    expect(collectDashboard().anomalies.some((i) => i.id === sessId)).toBe(
-      true,
-    );
+    expect(collectDashboard().fyi.some((i) => i.id === sessId)).toBe(true);
 
     await dismissSession(sessId);
 
-    expect(collectDashboard().anomalies.some((i) => i.id === sessId)).toBe(
-      false,
-    );
+    expect(collectDashboard().fyi.some((i) => i.id === sessId)).toBe(false);
   });
 });
 
-describe("ideas section", () => {
-  it("hides unscored ideas from the rendered list", () => {
-    insertScoredIdea({ title: "unscored one" });
-    const d = collectDashboard();
-    expect(d.ideas).toHaveLength(0);
-    const stats = collectIdeasStats();
-    expect(stats.unscoredTotal).toBe(1);
-    expect(stats.scoredTotal).toBe(0);
-  });
-
-  it("sorts your-call first, then suggest-* by score desc", () => {
-    insertScoredIdea({
-      title: "promote-high",
+describe("review section — ideas verdict + blocked + pr-open", () => {
+  it("includes your-call ideas but excludes suggest-* ideas", () => {
+    const yourCall = insertScoredIdea({
+      title: "judge me",
+      verdict: "your-call",
+      score: 0.5,
+    });
+    const promote = insertScoredIdea({
+      title: "promote-me",
       verdict: "suggest-promote",
       score: 0.9,
     });
-    insertScoredIdea({
-      title: "your-call-mid",
-      verdict: "your-call",
-      score: 0.4,
-    });
-    insertScoredIdea({
-      title: "kill-mid",
+    const kill = insertScoredIdea({
+      title: "kill-me",
       verdict: "suggest-kill",
-      score: 0.5,
+      score: 0.8,
     });
+
     const d = collectDashboard();
-    // your-call is the user's decision surface and sorts first.
-    expect(d.ideas[0].ideaMeta?.verdict).toBe("your-call");
-    // Below your-call, promote/kill interleave by score desc — 0.9 > 0.5.
-    expect(d.ideas[1].ideaMeta?.verdict).toBe("suggest-promote");
-    expect(d.ideas[2].ideaMeta?.verdict).toBe("suggest-kill");
+    expect(d.review.some((i) => i.id === yourCall)).toBe(true);
+    expect(d.review.some((i) => i.id === promote)).toBe(false);
+    expect(d.review.some((i) => i.id === kill)).toBe(false);
+    expect(d.triagedIdeasCount).toBe(2);
   });
 
-  it("reports scored + unscored counts in stats", () => {
+  it("includes blocked work items in review", () => {
+    const id = insertWi({ title: "blocked one", status: "blocked" });
+    expect(
+      collectDashboard().review.some(
+        (i) => i.id === id && i.kind === "blocked-item",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("ideas stats (browse count)", () => {
+  it("reports scored + unscored totals", () => {
     insertScoredIdea({ verdict: "suggest-promote", score: 0.8 });
     insertScoredIdea();
     insertScoredIdea();
@@ -195,8 +193,7 @@ describe("idea actions", () => {
       verdict: "suggest-promote",
       score: 0.9,
     });
-    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(true);
-
+    // suggest-promote does NOT surface in review, but accept still works.
     const r = await acceptIdea(id);
     expect(r.ok).toBe(true);
 
@@ -205,9 +202,6 @@ describe("idea actions", () => {
     expect(idea?.promoted_to).toBeTruthy();
     const wi = workItems.get(idea!.promoted_to!);
     expect(wi?.status).toBe("queued");
-
-    // Section rerenders without the promoted row.
-    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(false);
   });
 
   it("acceptIdea kills a suggest-kill idea", async () => {
@@ -219,7 +213,6 @@ describe("idea actions", () => {
     const r = await acceptIdea(id);
     expect(r.ok).toBe(true);
     expect(ideas.get(id)?.status).toBe("killed");
-    expect(collectDashboard().ideas.some((i) => i.id === id)).toBe(false);
   });
 
   it("acceptIdea refuses your-call verdict", async () => {
@@ -247,7 +240,7 @@ describe("idea actions", () => {
     expect(ideas.get(c)?.status).toBe("deferred");
   });
 
-  it("acceptAllSuggestKill is a two-step confirm", async () => {
+  it("acceptAllSuggestKill is a two-step confirm (still works even though UI hides suggest-* rows)", async () => {
     insertScoredIdea({ verdict: "suggest-kill", score: 0.8 });
     insertScoredIdea({ verdict: "suggest-kill", score: 0.7 });
     insertScoredIdea({ verdict: "suggest-promote", score: 0.8 });
@@ -255,25 +248,11 @@ describe("idea actions", () => {
     const first = await acceptAllSuggestKill(false);
     expect(first.ok).toBe(false);
     expect(first.message).toMatch(/confirm/);
-    // No status changed yet.
     expect(ideas.list({ status: "killed" })).toHaveLength(0);
 
     const second = await acceptAllSuggestKill(true);
     expect(second.ok).toBe(true);
     expect(ideas.list({ status: "killed" })).toHaveLength(2);
-    // suggest-promote untouched.
     expect(ideas.list({ status: "new" })).toHaveLength(1);
-  });
-});
-
-describe("queue items still render (no regression)", () => {
-  it("keeps a queued work item visible even after inbox_acked_at is set", () => {
-    const id = insertWi({ title: "queued item", status: "queued" });
-    getDb()
-      .prepare(
-        `UPDATE work_items SET inbox_acked_at = datetime('now') WHERE id = ?`,
-      )
-      .run(id);
-    expect(collectDashboard().queue.some((i) => i.id === id)).toBe(true);
   });
 });

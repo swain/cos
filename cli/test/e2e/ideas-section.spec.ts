@@ -6,14 +6,22 @@ import { E2E_DB_PATH } from "../helpers/env.js";
 const ideaRowSelector = (id: string) =>
   `#row-idea\\:${id.replace(/:/g, "\\:")}`;
 
-test("IDEAS section renders verdict + rationale + actions for scored ideas", async ({
+test("your-call ideas fold into Review; suggest-* hide behind a browse line", async ({
   page,
 }) => {
   const db = openSeedDb(E2E_DB_PATH);
+  let yourCallId = "";
   let promoteId = "";
   let killId = "";
   try {
     clearAll(db);
+    yourCallId = seedIdea(db, {
+      title: "judge this one",
+      triage_verdict: "your-call",
+      triage_rationale: "needs a call",
+      triage_score: 0.5,
+      confidence: 0.6,
+    });
     promoteId = seedIdea(db, {
       title: "speedy win",
       triage_verdict: "suggest-promote",
@@ -27,46 +35,35 @@ test("IDEAS section renders verdict + rationale + actions for scored ideas", asy
       triage_rationale: "already done",
       triage_score: 0.8,
     });
-    // An unscored idea — should NOT render but should show up in the
-    // "+N still awaiting triage" line.
-    seedIdea(db, { title: "not scored yet" });
   } finally {
     db.close();
   }
 
   await page.goto("/");
 
-  const promoteRow = page.locator(ideaRowSelector(promoteId));
-  await expect(promoteRow).toBeVisible();
-  // Verdict is expressed as a modifier class on the row container.
-  await expect(promoteRow).toHaveClass(/idea--suggest-promote/);
-  // Rationale renders in the collapsed <details> summary as a one-line snippet.
-  await expect(promoteRow.locator(".idea__rationale-line")).toContainText(
-    "cheap, high ROI",
-  );
-  // Accept is the primary action and is always visible.
+  // your-call renders in Review with promote/kill/defer actions.
+  const yourCallRow = page.locator(ideaRowSelector(yourCallId));
+  await expect(yourCallRow).toBeVisible();
   await expect(
-    promoteRow.locator('form[action$="/accept"] button'),
+    yourCallRow.locator('form[action$="/promote"] button'),
   ).toBeVisible();
-  // Secondary actions (kill, defer) live inside the collapsed <details>.
-  // They are attached to the DOM but not visible until the user expands.
   await expect(
-    promoteRow.locator('form[action$="/kill"] button'),
-  ).toBeAttached();
+    yourCallRow.locator('form[action$="/kill"] button'),
+  ).toBeVisible();
   await expect(
-    promoteRow.locator('form[action$="/defer"] button'),
-  ).toBeAttached();
+    yourCallRow.locator('form[action$="/defer"] button'),
+  ).toBeVisible();
 
-  const killRow = page.locator(ideaRowSelector(killId));
-  await expect(killRow).toHaveClass(/idea--suggest-kill/);
-
-  // Unscored idea is not in the rendered list; the "awaiting triage" line is.
-  await expect(page.locator("#section-ideas .ideas-more")).toContainText(
-    "still awaiting triage",
+  // suggest-promote / suggest-kill are NOT on the page — they're collapsed into
+  // a single "N triaged ideas" browse line in FYI.
+  await expect(page.locator(ideaRowSelector(promoteId))).toHaveCount(0);
+  await expect(page.locator(ideaRowSelector(killId))).toHaveCount(0);
+  await expect(page.locator("#section-fyi .browse-line")).toContainText(
+    "triaged ideas",
   );
 });
 
-test("accept on a suggest-promote idea queues a work item and hides the row", async ({
+test("promote on a your-call idea queues a work item and hides the row", async ({
   page,
 }) => {
   const db = openSeedDb(E2E_DB_PATH);
@@ -74,8 +71,8 @@ test("accept on a suggest-promote idea queues a work item and hides the row", as
   try {
     clearAll(db);
     ideaId = seedIdea(db, {
-      title: "clear win to promote",
-      triage_verdict: "suggest-promote",
+      title: "promote this",
+      triage_verdict: "your-call",
       triage_rationale: "clear win",
       triage_score: 0.9,
     });
@@ -88,11 +85,10 @@ test("accept on a suggest-promote idea queues a work item and hides the row", as
   const row = page.locator(ideaRowSelector(ideaId));
   await expect(row).toBeVisible();
 
-  await row.locator('form[action$="/accept"] button').click();
+  await row.locator('form[action$="/promote"] button').click();
 
   await expect(page.locator(ideaRowSelector(ideaId))).toHaveCount(0);
 
-  // DB should reflect the promotion.
   const verify = new Database(E2E_DB_PATH);
   try {
     const idea = verify
@@ -106,69 +102,5 @@ test("accept on a suggest-promote idea queues a work item and hides the row", as
     expect(wi.status).toBe("queued");
   } finally {
     verify.close();
-  }
-});
-
-test("accept-all-suggest-kill requires a confirm submit", async ({ page }) => {
-  const db = openSeedDb(E2E_DB_PATH);
-  try {
-    clearAll(db);
-    seedIdea(db, {
-      title: "kill 1",
-      triage_verdict: "suggest-kill",
-      triage_score: 0.8,
-    });
-    seedIdea(db, {
-      title: "kill 2",
-      triage_verdict: "suggest-kill",
-      triage_score: 0.7,
-    });
-    seedIdea(db, {
-      title: "spare",
-      triage_verdict: "suggest-promote",
-      triage_score: 0.8,
-    });
-  } finally {
-    db.close();
-  }
-
-  await page.goto("/");
-  const section = page.locator("#section-ideas");
-
-  // First click arms the confirm state.
-  await section
-    .locator('form[action="/ideas/accept-all-suggest-kill"] button')
-    .first()
-    .click();
-  await expect(section.locator(".confirm")).toBeVisible();
-
-  // DB still has 2 suggest-kill items alive.
-  const checkBefore = new Database(E2E_DB_PATH);
-  try {
-    const alive = checkBefore
-      .prepare(`SELECT COUNT(*) AS n FROM ideas WHERE status = 'new'`)
-      .get() as { n: number };
-    expect(alive.n).toBe(3);
-  } finally {
-    checkBefore.close();
-  }
-
-  // Second click (the confirm form) actually kills them.
-  await section
-    .locator('form[action="/ideas/accept-all-suggest-kill"] button.danger')
-    .click();
-
-  const check = new Database(E2E_DB_PATH);
-  try {
-    const killed = check
-      .prepare(`SELECT COUNT(*) AS n FROM ideas WHERE status = 'killed'`)
-      .get() as { n: number };
-    expect(killed.n).toBe(2);
-    const aliveAfter = check
-      .prepare(`SELECT COUNT(*) AS n FROM ideas WHERE status = 'new'`)
-      .get() as { n: number };
-    expect(aliveAfter.n).toBe(1);
-  } finally {
-    check.close();
   }
 });

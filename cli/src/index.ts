@@ -52,6 +52,7 @@ import {
 } from "./commands/recurring.js";
 import { cmdGenerateAiNative } from "./commands/generators.js";
 import { cmdReviewWeek } from "./commands/review.js";
+import { cmdReviewPr } from "./commands/review-pr.js";
 import {
   cmdFollowupInsert,
   cmdFollowupList,
@@ -531,6 +532,13 @@ program
   .action((opts) =>
     cmdReviewWeek({ notify: opts.notify, stdout: !!opts.stdout }),
   );
+
+program
+  .command("review <prUrls...>")
+  .description(
+    "Review PR(s) in plannotator, then mirror the decision to GitHub via gh pr review",
+  )
+  .action((prUrls: string[]) => cmdReviewPr(prUrls));
 
 program
   .command("log-append <text>")

@@ -12,6 +12,7 @@ import { displayWorkItemId } from "../util.js";
 import type { Idea, TriageVerdict, WorkItem } from "../types.js";
 import {
   flattenDashboard,
+  FYI_AUTO_READ_MS,
   IDEAS_TOP_N,
   SECTION_LIMIT,
   type IdeasSectionStats,
@@ -19,7 +20,6 @@ import {
   type InboxItem,
 } from "./types.js";
 
-const QUEUE_TOP_N = 10;
 const RECENT_WIN_WINDOW_MS = 24 * 60 * 60 * 1000;
 const STALE_TICK_MINUTES = 20;
 
@@ -73,19 +73,74 @@ const reposLabel = (repos: string[]): string =>
 const isCosOnly = (repos: string[]): boolean =>
   repos.length > 0 && repos.every((r) => r === "cos");
 
-const wiTitleMap = (): Map<string, string> => {
-  const m = new Map<string, string>();
-  for (const wi of workItems.list()) m.set(wi.id, wi.title);
-  return m;
-};
-
 const wiDisplayIdMap = (): Map<string, string> => {
   const m = new Map<string, string>();
   for (const wi of workItems.list()) m.set(wi.id, displayWorkItemId(wi));
   return m;
 };
 
-const needsDecisionItems = (): InboxItem[] => {
+const sessionSummaryForWorkItem = (wiId: string): string | null => {
+  const latest = getDb()
+    .prepare(
+      `SELECT status, notes, current_step, last_heartbeat FROM sessions
+       WHERE work_item_id = ? ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(wiId) as
+    | {
+        status: string;
+        notes: string | null;
+        current_step: string | null;
+        last_heartbeat: string;
+      }
+    | undefined;
+  if (!latest) return null;
+  if (latest.notes) return `last session ${latest.status}: ${latest.notes}`;
+  return `last session ${latest.status}, step=${latest.current_step ?? "—"}`;
+};
+
+// Sort scored ideas the way the user wants to see them: confidence desc,
+// score as tiebreak. Only your-call ideas end up in Review — suggest-* are
+// hidden behind the "N triaged — browse" affordance.
+const sortYourCallIdeas = (scored: Idea[]): Idea[] =>
+  [...scored].sort((a, b) => {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return (b.triage_score ?? 0) - (a.triage_score ?? 0);
+  });
+
+const TITLE_PREFIX_RE = /^\[([^\]]+)\]\s*/;
+
+const parseIdeaTitle = (
+  raw: string,
+): { subject: string; sourceTag: string | null } => {
+  const m = raw.match(TITLE_PREFIX_RE);
+  if (!m) return { subject: raw, sourceTag: null };
+  return { subject: raw.slice(m[0].length), sourceTag: m[1] };
+};
+
+const ideaToItem = (i: Idea): InboxItem => {
+  const { subject, sourceTag } = parseIdeaTitle(i.title);
+  return {
+    key: `idea:${i.id}`,
+    kind: "idea",
+    id: i.id,
+    section: "review",
+    urgency: "normal",
+    subject,
+    body: i.triage_rationale ?? trimBody(i.description, 160),
+    related_ids: [],
+    created_at: i.created_at,
+    ideaMeta: {
+      verdict: i.triage_verdict as TriageVerdict,
+      rationale: i.triage_rationale ?? "",
+      score: i.triage_score ?? 0,
+      confidence: i.confidence,
+      repos_guess: i.repos_guess,
+      sourceTag,
+    },
+  };
+};
+
+const reviewItems = (): InboxItem[] => {
   const items: InboxItem[] = [];
 
   for (const n of notifications.listUnpushed()) {
@@ -94,7 +149,7 @@ const needsDecisionItems = (): InboxItem[] => {
       key: `notification:${n.id}`,
       kind: "notification",
       id: n.id,
-      section: "needsDecision",
+      section: "review",
       urgency: n.urgency,
       subject: n.subject,
       body: trimBody(n.body),
@@ -108,7 +163,7 @@ const needsDecisionItems = (): InboxItem[] => {
       key: `signal:${s.id}`,
       kind: "signal",
       id: s.id,
-      section: "needsDecision",
+      section: "review",
       urgency: "urgent",
       subject: `${s.kind} (${s.source})`,
       body: trimBody(s.external_id ?? JSON.stringify(s.payload)),
@@ -124,7 +179,7 @@ const needsDecisionItems = (): InboxItem[] => {
       kind: "work-item",
       id: wi.id,
       displayLabel: displayWorkItemId(wi),
-      section: "needsDecision",
+      section: "review",
       urgency: "urgent",
       subject: `P${wi.priority} ${wi.title}`,
       body: trimBody(wi.description),
@@ -142,7 +197,7 @@ const needsDecisionItems = (): InboxItem[] => {
       kind: "blocked-item",
       id: wi.id,
       displayLabel: displayWorkItemId(wi),
-      section: "needsDecision",
+      section: "review",
       urgency: "urgent",
       subject: `BLOCKED P${wi.priority} ${wi.title}`,
       body: trimBody(lastSession ?? wi.description),
@@ -166,9 +221,9 @@ const needsDecisionItems = (): InboxItem[] => {
       kind: "pr-review",
       id: wi.id,
       displayLabel: displayWorkItemId(wi),
-      section: "needsDecision",
+      section: "review",
       urgency: "urgent",
-      subject: `REVIEW: ${wi.title}`,
+      subject: wi.title,
       body: trimBody(`PR awaiting your review — ${gpPr}`),
       related_ids: [gpPr, ...wi.pr_urls.filter((u) => u !== gpPr)],
       created_at: wi.updated_at,
@@ -176,199 +231,18 @@ const needsDecisionItems = (): InboxItem[] => {
     });
   }
 
-  return items;
-};
-
-const sessionSummaryForWorkItem = (wiId: string): string | null => {
-  const latest = getDb()
-    .prepare(
-      `SELECT status, notes, current_step, last_heartbeat FROM sessions
-       WHERE work_item_id = ? ORDER BY started_at DESC LIMIT 1`,
-    )
-    .get(wiId) as
-    | {
-        status: string;
-        notes: string | null;
-        current_step: string | null;
-        last_heartbeat: string;
-      }
-    | undefined;
-  if (!latest) return null;
-  if (latest.notes) return `last session ${latest.status}: ${latest.notes}`;
-  return `last session ${latest.status}, step=${latest.current_step ?? "—"}`;
-};
-
-const activeItems = (
-  titles: Map<string, string>,
-  displayIds: Map<string, string>,
-): InboxItem[] => {
-  const items: InboxItem[] = [];
-  const statuses: ("running" | "starting" | "idle")[] = [
-    "running",
-    "starting",
-    "idle",
-  ];
-  for (const status of statuses) {
-    for (const sess of sessions.list({ status })) {
-      const title = sess.work_item_id
-        ? (titles.get(sess.work_item_id) ?? sess.work_item_id)
-        : sess.kind;
-      const hbAge = ageMinutes(sess.last_heartbeat);
-      const wiDisplay = sess.work_item_id
-        ? (displayIds.get(sess.work_item_id) ?? sess.work_item_id)
-        : "—";
-      items.push({
-        key: `worker:${sess.id}`,
-        kind: "worker",
-        id: sess.id,
-        section: "active",
-        urgency: "normal",
-        subject: `${status.toUpperCase()} ${title}`,
-        body: trimBody(
-          `step=${sess.current_step ?? "—"} hb=${hbAge}m ago wi=${wiDisplay}`,
-        ),
-        related_ids: sess.work_item_id ? [sess.work_item_id] : [],
-        created_at: sess.started_at,
-        meta: {
-          step: sess.current_step,
-          last_heartbeat: sess.last_heartbeat,
-          hb_age_minutes: hbAge,
-          work_item_id: wiDisplay,
-        },
-      });
-    }
+  const scoredIdeas = ideas
+    .list({ status: "new" })
+    .filter((i) => i.triaged_at !== null && i.triage_verdict === "your-call");
+  for (const i of sortYourCallIdeas(scoredIdeas)) {
+    items.push(ideaToItem(i));
   }
+
   return items;
 };
 
-const queueItems = (): InboxItem[] => {
-  const rows = workItems
-    .list({ status: "queued" })
-    .filter((wi) => !wi.needs_approval)
-    .slice(0, QUEUE_TOP_N);
-  return rows.map((wi) => ({
-    key: `queue-item:${wi.id}`,
-    kind: "queue-item" as const,
-    id: wi.id,
-    displayLabel: displayWorkItemId(wi),
-    section: "queue" as const,
-    urgency: "normal" as const,
-    subject: `P${wi.priority} ${wi.title}`,
-    body: trimBody(`${reposLabel(wi.repos)} — ${wi.description}`),
-    related_ids: [],
-    created_at: wi.created_at,
-    meta: { priority: wi.priority, repos: reposLabel(wi.repos) },
-  }));
-};
-
-// Sort scored ideas the way the user wants to see them: "your-call" first
-// (that's the decision surface), then promote/kill interleaved by score
-// desc. Confidence tiebreaks within a verdict bucket.
-const verdictRank = (v: TriageVerdict | null): number => {
-  if (v === "your-call") return 0;
-  return 1;
-};
-
-const sortIdeasForDashboard = (scored: Idea[]): Idea[] =>
-  [...scored].sort((a, b) => {
-    const va = verdictRank(a.triage_verdict as TriageVerdict | null);
-    const vb = verdictRank(b.triage_verdict as TriageVerdict | null);
-    if (va !== vb) return va - vb;
-    if (va === 0) {
-      // your-call: confidence desc, then score desc as a stable tiebreak.
-      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-      return (b.triage_score ?? 0) - (a.triage_score ?? 0);
-    }
-    // promote/kill: score desc, confidence as tiebreak.
-    const sa = a.triage_score ?? 0;
-    const sb = b.triage_score ?? 0;
-    if (sb !== sa) return sb - sa;
-    return b.confidence - a.confidence;
-  });
-
-// Generator-embedded prefix like `[ai-native:gp-api:dim4]` that gets prepended
-// to the title for dedupe. Keep it out of the rendered title — it's noise in a
-// triage surface — and surface it as a muted tag in the meta line instead.
-const TITLE_PREFIX_RE = /^\[([^\]]+)\]\s*/;
-
-const parseIdeaTitle = (
-  raw: string,
-): { subject: string; sourceTag: string | null } => {
-  const m = raw.match(TITLE_PREFIX_RE);
-  if (!m) return { subject: raw, sourceTag: null };
-  return { subject: raw.slice(m[0].length), sourceTag: m[1] };
-};
-
-// Returns the full sorted list of scored ideas plus a stats sidecar (unscored
-// count lives here because the renderer surfaces it separately in the "show N
-// more" line, while section-item code stays uniform across sections).
-const ideaItems = (): { items: InboxItem[]; stats: IdeasSectionStats } => {
-  const all = ideas.list({ status: "new" });
-  const scored = all.filter(
-    (i) => i.triaged_at !== null && i.triage_verdict !== null,
-  );
-  const unscored = all.length - scored.length;
-  const sorted = sortIdeasForDashboard(scored);
-  const items: InboxItem[] = sorted.map((i) => {
-    const { subject, sourceTag } = parseIdeaTitle(i.title);
-    return {
-      key: `idea:${i.id}`,
-      kind: "idea" as const,
-      id: i.id,
-      section: "ideas" as const,
-      urgency: "normal" as const,
-      subject,
-      body: i.triage_rationale ?? trimBody(i.description, 160),
-      related_ids: [],
-      created_at: i.created_at,
-      ideaMeta: {
-        verdict: i.triage_verdict as TriageVerdict,
-        rationale: i.triage_rationale ?? "",
-        score: i.triage_score ?? 0,
-        confidence: i.confidence,
-        repos_guess: i.repos_guess,
-        sourceTag,
-      },
-    };
-  });
-  return {
-    items,
-    stats: {
-      topN: IDEAS_TOP_N,
-      scoredTotal: scored.length,
-      unscoredTotal: unscored,
-    },
-  };
-};
-
-const recentWinItems = (): InboxItem[] => {
-  const cutoff = Date.now() - RECENT_WIN_WINDOW_MS;
-  const wins: WorkItem[] = [
-    ...workItems.list({ status: "merged" }),
-    ...workItems.list({ status: "done" }),
-  ].filter((wi) => !wi.inbox_acked_at && parseTs(wi.updated_at) >= cutoff);
-
-  return wins
-    .sort((a, b) => parseTs(b.updated_at) - parseTs(a.updated_at))
-    .slice(0, SECTION_LIMIT)
-    .map((wi) => ({
-      key: `recent-win:${wi.id}`,
-      kind: "recent-win" as const,
-      id: wi.id,
-      displayLabel: displayWorkItemId(wi),
-      section: "recentWins" as const,
-      urgency: "digest" as const,
-      subject: `${wi.status.toUpperCase()} ${wi.title}`,
-      body: trimBody(
-        wi.pr_urls.length
-          ? `PRs: ${wi.pr_urls.join(" · ")}`
-          : reposLabel(wi.repos),
-      ),
-      related_ids: wi.pr_urls,
-      created_at: wi.updated_at,
-      meta: { priority: wi.priority, repos: reposLabel(wi.repos) },
-    }));
-};
+const withinFyiWindow = (iso: string): boolean =>
+  Date.now() - parseTs(iso) < FYI_AUTO_READ_MS;
 
 const anomalyItems = (displayIds: Map<string, string>): InboxItem[] => {
   const items: InboxItem[] = [];
@@ -383,7 +257,7 @@ const anomalyItems = (displayIds: Map<string, string>): InboxItem[] => {
         key: `session:${sess.id}`,
         kind: "session",
         id: sess.id,
-        section: "anomalies",
+        section: "fyi",
         urgency: "normal",
         subject: `${status.toUpperCase()} session ${sess.id}`,
         body: trimBody(
@@ -406,48 +280,95 @@ const anomalyItems = (displayIds: Map<string, string>): InboxItem[] => {
   return items;
 };
 
-const notificationTail = (
-  urgency: "normal" | "digest",
-  section: "fyi" | "digest",
-): InboxItem[] =>
-  notifications
-    .listUnpushed()
-    .filter((n) => n.urgency === urgency)
-    .map((n) => ({
+const fyiItems = (displayIds: Map<string, string>): InboxItem[] => {
+  const items: InboxItem[] = [];
+
+  for (const n of notifications.listUnpushed()) {
+    if (n.urgency === "urgent") continue;
+    items.push({
       key: `notification:${n.id}`,
-      kind: "notification" as const,
+      kind: "notification",
       id: n.id,
-      section,
+      section: "fyi",
       urgency: n.urgency,
       subject: n.subject,
       body: trimBody(n.body),
       related_ids: n.related_ids,
       created_at: n.created_at,
+    });
+  }
+
+  for (const a of anomalyItems(displayIds)) items.push(a);
+
+  return items
+    .filter((i) => withinFyiWindow(i.created_at))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, SECTION_LIMIT * 2);
+};
+
+const recentWinItems = (): InboxItem[] => {
+  const cutoff = Date.now() - RECENT_WIN_WINDOW_MS;
+  const wins: WorkItem[] = [
+    ...workItems.list({ status: "merged" }),
+    ...workItems.list({ status: "done" }),
+  ].filter((wi) => !wi.inbox_acked_at && parseTs(wi.updated_at) >= cutoff);
+
+  return wins
+    .sort((a, b) => parseTs(b.updated_at) - parseTs(a.updated_at))
+    .slice(0, SECTION_LIMIT)
+    .map((wi) => ({
+      key: `recent-win:${wi.id}`,
+      kind: "recent-win" as const,
+      id: wi.id,
+      displayLabel: displayWorkItemId(wi),
+      section: "fyi" as const,
+      urgency: "digest" as const,
+      subject: `${wi.status.toUpperCase()} ${wi.title}`,
+      body: trimBody(
+        wi.pr_urls.length
+          ? `PRs: ${wi.pr_urls.join(" · ")}`
+          : reposLabel(wi.repos),
+      ),
+      related_ids: wi.pr_urls,
+      created_at: wi.updated_at,
+      meta: { priority: wi.priority, repos: reposLabel(wi.repos) },
     }));
+};
+
+const triagedIdeasCount = (): number =>
+  ideas
+    .list({ status: "new" })
+    .filter(
+      (i) =>
+        i.triaged_at !== null &&
+        (i.triage_verdict === "suggest-promote" ||
+          i.triage_verdict === "suggest-kill"),
+    ).length;
 
 export const collectDashboard = (): InboxDashboard => {
-  const titles = wiTitleMap();
   const displayIds = wiDisplayIdMap();
-  const ideas = ideaItems();
   return {
-    needsDecision: needsDecisionItems().sort((a, b) =>
+    review: reviewItems().sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     ),
-    active: activeItems(titles, displayIds),
-    queue: queueItems(),
-    ideas: ideas.items,
+    fyi: fyiItems(displayIds),
     recentWins: recentWinItems(),
-    anomalies: anomalyItems(displayIds),
-    fyi: notificationTail("normal", "fyi").slice(0, SECTION_LIMIT),
-    digest: notificationTail("digest", "digest").slice(0, SECTION_LIMIT),
+    triagedIdeasCount: triagedIdeasCount(),
   };
 };
 
-// Returned alongside the dashboard so the renderer can show "show N more"
-// with both the trimmed-scored count and the still-to-be-triaged count.
-// Kept separate from InboxDashboard so the generic flatten / section loop
-// stays clean (flattenDashboard only cares about items).
-export const collectIdeasStats = (): IdeasSectionStats => ideaItems().stats;
+// Kept for IDEAS section tests + the triaged-browse expander.
+export const collectIdeasStats = (): IdeasSectionStats => {
+  const all = ideas.list({ status: "new" });
+  const scored = all.filter(
+    (i) => i.triaged_at !== null && i.triage_verdict !== null,
+  );
+  return {
+    topN: IDEAS_TOP_N,
+    scoredTotal: scored.length,
+    unscoredTotal: all.length - scored.length,
+  };
+};
 
 export const collectInbox = (): InboxItem[] =>
   flattenDashboard(collectDashboard());
