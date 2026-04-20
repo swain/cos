@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { signals } from "../db.js";
+import { meetingPrepRuns, signals, type MeetingPrepRun } from "../db.js";
 import { appendGoogleAuthUser, MEETINGS_DIR, slugify } from "../util.js";
 import type { InboxItem } from "./types.js";
 
@@ -32,6 +32,13 @@ type GwsEvent = {
 
 type GwsEventList = { items?: GwsEvent[] };
 
+export type PrepStatus =
+  | "prep-ready"
+  | "prep-running"
+  | "prep-failed"
+  | "no-prep-needed"
+  | "no-prep";
+
 export type UpcomingMeeting = {
   id: string;
   summary: string;
@@ -39,9 +46,10 @@ export type UpcomingMeeting = {
   endMs: number;
   attendeeCount: number;
   hangoutLink: string | null;
-  prepStatus: "prep-ready" | "prep-pending" | "no-prep";
+  prepStatus: PrepStatus;
   prepPath: string | null;
   prepSlug: string;
+  prepError: string | null;
 };
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -95,6 +103,38 @@ const lookupPendingSignalEventIds = (): Set<string> => {
       out.add(s.external_id);
   }
   return out;
+};
+
+// We only surface prep-failed / no-prep-needed outcomes that are still fresh —
+// a stale run for an event 6h from now would otherwise paint the row red
+// forever. 30 minutes is long enough to catch back-to-back reloads but short
+// enough that the user's retry affordance doesn't persist across sessions.
+const RUN_RESULT_FRESHNESS_MS = 30 * 60 * 1000;
+
+const parseSqliteTs = (ts: string): number => {
+  const iso = ts.includes("T") ? ts : ts.replace(" ", "T");
+  const withZ = iso.endsWith("Z") ? iso : `${iso}Z`;
+  const t = new Date(withZ).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+const runAgeMs = (run: MeetingPrepRun): number => {
+  const ref = run.finished_at ?? run.started_at;
+  return Date.now() - parseSqliteTs(ref);
+};
+
+// First error line is usually the most informative; everything after tends to
+// be stack trace or keyring noise. Keep it short — the card has a two-line
+// clamp anyway.
+const tailError = (s: string | null): string | null => {
+  if (!s) return null;
+  const line = s
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .pop();
+  if (!line) return null;
+  return line.length > 160 ? line.slice(0, 159) + "…" : line;
 };
 
 const fetchEventsWithGws = (
@@ -160,10 +200,13 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
 
   const prepIndex = readPrepIndex();
   const pendingEventIds = lookupPendingSignalEventIds();
+  const eligibleEvents = events.filter(isRealMeeting);
+  const runsByEvent = meetingPrepRuns.latestForEvents(
+    eligibleEvents.map((e) => e.id),
+  );
 
   const value: UpcomingMeeting[] = [];
-  for (const e of events) {
-    if (!isRealMeeting(e)) continue;
+  for (const e of eligibleEvents) {
     const startIso = e.start!.dateTime!;
     const startMs = new Date(startIso).getTime();
     if (Number.isNaN(startMs)) continue;
@@ -175,7 +218,41 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
     const slug = prepSlug(e.summary ?? "meeting", startIso);
     const hasFile = prepIndex.byExact.has(slug);
     const prepPath = hasFile ? `${MEETINGS_DIR}/${slug}.md` : null;
-    const pending = !hasFile && pendingEventIds.has(e.id);
+    const run = runsByEvent.get(e.id) ?? null;
+
+    // Decide prep status with this precedence:
+    //   1. File on disk         → prep-ready (even if a failed run exists —
+    //                             the successful output is what matters)
+    //   2. Active run            → prep-running
+    //   3. Fresh no-prep-needed → surfaced so the user knows why
+    //   4. Fresh failure        → surfaced so the user can retry
+    //   5. Pending signal       → prep-running (legacy, set by the 20-30min
+    //                             ambient collector)
+    //   6. Otherwise            → no-prep
+    let prepStatus: PrepStatus;
+    let prepError: string | null = null;
+    if (hasFile) {
+      prepStatus = "prep-ready";
+    } else if (run && run.status === "running") {
+      prepStatus = "prep-running";
+    } else if (
+      run &&
+      run.status === "no-prep-needed" &&
+      runAgeMs(run) < RUN_RESULT_FRESHNESS_MS
+    ) {
+      prepStatus = "no-prep-needed";
+    } else if (
+      run &&
+      run.status === "failed" &&
+      runAgeMs(run) < RUN_RESULT_FRESHNESS_MS
+    ) {
+      prepStatus = "prep-failed";
+      prepError = tailError(run.error);
+    } else if (pendingEventIds.has(e.id)) {
+      prepStatus = "prep-running";
+    } else {
+      prepStatus = "no-prep";
+    }
 
     value.push({
       id: e.id,
@@ -184,9 +261,10 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
       endMs,
       attendeeCount: countAttendees(e),
       hangoutLink: e.hangoutLink ? appendGoogleAuthUser(e.hangoutLink) : null,
-      prepStatus: hasFile ? "prep-ready" : pending ? "prep-pending" : "no-prep",
+      prepStatus,
       prepPath,
       prepSlug: slug,
+      prepError,
     });
   }
 
@@ -257,6 +335,7 @@ export const upcomingToItem = (
       prepStatus: m.prepStatus,
       prepPath: m.prepPath,
       prepSlug: m.prepSlug,
+      prepError: m.prepError,
       hangoutLink: m.hangoutLink,
       relative: rel,
       absolute: abs,
@@ -267,4 +346,17 @@ export const upcomingToItem = (
 export const upcomingMeetingsItems = (): InboxItem[] => {
   const now = Date.now();
   return getUpcomingMeetings().map((m) => upcomingToItem(m, now));
+};
+
+// Looks up a cached UpcomingMeeting for the given event id. prepMeetingNow
+// needs the slug + prepPath synchronously to start a run row and to check on
+// exit whether the collector actually wrote the file. Falls back to null if
+// the event is outside the 8h window or the cache is empty.
+export const findUpcomingMeetingById = (
+  eventId: string,
+): UpcomingMeeting | null => {
+  for (const m of getUpcomingMeetings()) {
+    if (m.id === eventId) return m;
+  }
+  return null;
 };
