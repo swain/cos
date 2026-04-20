@@ -81,6 +81,31 @@ export const tableRow = (cells: (string | number)[], widths: number[]) =>
 export const shortRepoName = (name: string): string =>
   name.includes("/") ? name.split("/").pop()! : name;
 
+// Google links opened by a user with multiple signed-in Google accounts
+// default to whichever account Google considers primary (usually personal),
+// forcing a context-switching dance. `authuser=1` pins them to the second
+// signed-in account — the work account for this user's setup. Applies to
+// Meet / Hangouts / Calendar / Docs; other hosts pass through untouched.
+const GOOGLE_AUTHUSER_HOSTS = new Set([
+  "meet.google.com",
+  "hangouts.google.com",
+  "calendar.google.com",
+  "docs.google.com",
+]);
+
+export const appendGoogleAuthUser = (url: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!GOOGLE_AUTHUSER_HOSTS.has(parsed.hostname)) return url;
+  if (parsed.searchParams.has("authuser")) return url;
+  parsed.searchParams.set("authuser", "1");
+  return parsed.toString();
+};
+
 // Repo entries in watched-repos.json may be plain strings ("owner/repo") or
 // objects ({ name, base_branch }). Object form lets a repo override the
 // global default_base_branch — needed because, e.g., cos uses `main` while

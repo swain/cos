@@ -23,7 +23,19 @@ From `.items[]`, skip:
 - Events the user has declined — i.e. the attendee matching the user's email has `responseStatus == "declined"`.
 - Events with no other attendees (solo holds, focus blocks): `attendees` missing or containing only the user.
 
-For each remaining event, capture: `id`, `summary`, `start.dateTime`, `end.dateTime`, `location`, `hangoutLink`/`conferenceData`, `attendees[].email`, `attendees[].displayName`, `description`.
+For each remaining event, capture: `id`, `summary`, `start.dateTime`, `end.dateTime`, `location`, `hangoutLink`/`conferenceData`, `htmlLink`, `attendees[].email`, `attendees[].displayName`, `description`, `attachments`.
+
+## 1a. authuser transform for Google links
+
+The user has multiple Google accounts signed in; the work account is the second one (`authuser=1`). Clicking any `meet.google.com` / `hangouts.google.com` / `calendar.google.com` / `docs.google.com` link without `authuser` lands in the personal account and prompts a switch.
+
+Before writing any such URL — into the prep file, the notification body, or anywhere else — pass it through this transform:
+
+- If the URL's host is not one of the four above, leave it alone.
+- If the URL already contains an `authuser=` query parameter, leave it alone.
+- Otherwise, append `authuser=1` as a query parameter: use `?authuser=1` if the URL has no query string, `&authuser=1` if it does. Preserve any existing `#fragment`.
+
+Apply this to: `hangoutLink`, `conferenceData.entryPoints[*].uri`, `htmlLink`, any `docs.google.com` URL pulled from `attachments[].fileUrl` or scraped out of `description`. Do not modify non-Google URLs.
 
 ## 2. Filter to the prep window
 
@@ -88,7 +100,9 @@ cat > ~/.claude/cos/meetings/<YYYY-MM-DD-slug>.md <<'EOF'
 # <event summary>
 
 - **When:** <start local time> – <end local time> (<duration> min)
-- **Where:** <location or hangout link or "—">
+- **Where:** <location or "—">
+- **Join:** <authuser-annotated hangout link or "—">
+- **Event page:** <authuser-annotated htmlLink>
 - **Event ID:** <calendar event id>
 
 ## Attendees
@@ -160,6 +174,7 @@ EOFPAYLOAD
 cos notify --urgency urgent \
   --subject "Meeting in <N> min: <event summary>" \
   --body "Starts at <local time>. Prep: ~/.claude/cos/meetings/<YYYY-MM-DD-slug>.md
+Join: <authuser-annotated hangout link or \"—\">
 Attendees: <comma-separated names>
 — Po"
 ```

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { signals } from "../db.js";
-import { MEETINGS_DIR, slugify } from "../util.js";
+import { appendGoogleAuthUser, MEETINGS_DIR, slugify } from "../util.js";
 import type { InboxItem } from "./types.js";
 
 // Fetch calendar events on the user's primary calendar in the next 8 hours
@@ -183,7 +183,7 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
       startMs,
       endMs,
       attendeeCount: countAttendees(e),
-      hangoutLink: e.hangoutLink ?? null,
+      hangoutLink: e.hangoutLink ? appendGoogleAuthUser(e.hangoutLink) : null,
       prepStatus: hasFile ? "prep-ready" : pending ? "prep-pending" : "no-prep",
       prepPath,
       prepSlug: slug,
