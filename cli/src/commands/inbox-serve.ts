@@ -129,6 +129,47 @@ body {
   max-width: 880px;
   -webkit-font-smoothing: antialiased;
 }
+@media (min-width: 1100px) {
+  body { max-width: 1240px; }
+}
+
+/* ----- Layout grid -----
+ * Default: single column (mobile + tablet). Grid promotes to 2-col at
+ * 1100px, but only when Upcoming has content — .layout--two-col is
+ * applied conditionally by the renderer so an empty right rail never
+ * takes up half the screen.
+ */
+.layout { display: block; }
+.layout .section { margin-bottom: 40px; }
+.layout .section:last-child { margin-bottom: 0; }
+
+@media (min-width: 1100px) {
+  .layout--two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    grid-template-areas:
+      "review upcoming"
+      "fyi    fyi";
+    column-gap: 40px;
+    row-gap: 56px;
+    align-items: start;
+  }
+  .layout--two-col .section { margin-bottom: 0; }
+  .layout--two-col .section--review { grid-area: review; min-width: 0; }
+  .layout--two-col .section--upcoming {
+    grid-area: upcoming;
+    min-width: 0;
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    /* Thin scrollbar so the sticky rail doesn't jump when it grows content. */
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+  }
+  .layout--two-col .section--fyi { grid-area: fyi; min-width: 0; }
+}
 
 /* Masthead — serif nameplate, thin hairline rule beneath, refresh meta in mono. */
 .masthead {
@@ -487,6 +528,102 @@ body {
 .prep-badge--ready { color: var(--green-fg); background: var(--green-bg); border-color: var(--green); }
 .prep-badge--pending { color: var(--amber); background: var(--amber-bg); border-color: var(--amber); }
 .prep-badge--none { color: var(--muted); background: var(--paper); border-color: var(--rule-strong); }
+
+/* ----- Upcoming: compact glance-widget rows ----- */
+.card--upcoming,
+.card--upcoming-ready,
+.card--upcoming-pending {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.card--upcoming .card__subject,
+.card--upcoming-ready .card__subject,
+.card--upcoming-pending .card__subject {
+  font-size: 13.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+.card--upcoming .card__meta,
+.card--upcoming-ready .card__meta,
+.card--upcoming-pending .card__meta {
+  margin-top: 6px;
+  gap: 10px;
+  font-size: 10.5px;
+}
+
+/* Overflow menu: single-secondary-action dropdown that needs no JS. */
+.overflow { position: relative; }
+.overflow > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  user-select: none;
+}
+.overflow > summary::-webkit-details-marker { display: none; }
+.overflow > summary:hover { background: var(--rule); color: var(--fg-soft); }
+.overflow[open] > summary { background: var(--rule); color: var(--fg-soft); }
+.overflow__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  min-width: 140px;
+  padding: 6px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.overflow__menu a, .overflow__menu button {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.upcoming-more {
+  margin-top: 4px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.upcoming-more summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.04em;
+}
+.upcoming-more summary::-webkit-details-marker { display: none; }
+.upcoming-more summary::before {
+  content: "▸";
+  font-size: 9px;
+  transition: transform 0.12s ease-out;
+}
+.upcoming-more[open] summary::before { transform: rotate(90deg); }
+.upcoming-more summary .label { color: var(--fg-soft); text-transform: uppercase; }
+.upcoming-more[open] { padding-bottom: 4px; }
+.upcoming-more[open] .upcoming-more__body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
 `;
 
 const isHttpUrl = (s: string): boolean =>
@@ -780,16 +917,16 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
         ? "card--upcoming-pending"
         : "card--upcoming";
   const id = encodeURIComponent(item.id);
-  const openPrepBtn =
+  // One primary action, inline. "Open prep" when the file is ready, otherwise
+  // "Prep now" / "Refresh prep". The glanceable widget shows exactly one CTA.
+  const primaryBtn =
     prepPath && prepStatus === "prep-ready"
       ? `<form method="post" action="/meetings/${id}/open-prep">${hiddenReturn(returnTo)}<input type="hidden" name="prepPath" value="${escapeHtml(prepPath)}"><button class="btn btn--primary">Open prep</button></form>`
-      : "";
-  const prepNowBtn =
-    prepStatus !== "prep-ready"
-      ? `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn">${prepStatus === "prep-pending" ? "Refresh prep" : "Prep now"}</button></form>`
-      : "";
-  const hangoutBtn = hangoutLink
-    ? `<a class="btn btn--muted" href="${escapeHtml(hangoutLink)}" target="_blank" rel="noopener">join</a>`
+      : `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">${prepStatus === "prep-pending" ? "Refresh prep" : "Prep now"}</button></form>`;
+  // Hangout link is a secondary — tucked in an overflow menu instead of
+  // cluttering the inline row.
+  const overflowMenu = hangoutLink
+    ? `<details class="overflow"><summary title="more">⋯</summary><div class="overflow__menu"><a class="btn btn--muted" href="${escapeHtml(hangoutLink)}" target="_blank" rel="noopener">Join meeting</a></div></details>`
     : "";
   const attendeeLabel =
     attendees === 1 ? "1 attendee" : `${attendees} attendees`;
@@ -805,10 +942,12 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
         <span>${escapeHtml(attendeeLabel)}</span>
       </div>
     </div>
-    <div class="actions">${openPrepBtn}${prepNowBtn}${hangoutBtn}</div>
+    <div class="actions">${primaryBtn}${overflowMenu}</div>
   </div>
 </article>`;
 };
+
+const UPCOMING_VISIBLE_LIMIT = 5;
 
 const renderUpcomingSection = (items: InboxItem[]): string => {
   if (!items.length) return "";
@@ -820,12 +959,26 @@ const renderUpcomingSection = (items: InboxItem[]): string => {
         <span class="section__count">${items.length} ${items.length === 1 ? "meeting" : "meetings"}</span>
       </div>
     </div>`;
-  const body = items
+  // Compact mode: first N visible, rest behind a "Show all" disclosure so the
+  // sticky rail stays glanceable even when the full calendar has more.
+  const visibleItems = items.slice(0, UPCOMING_VISIBLE_LIMIT);
+  const hiddenItems = items.slice(UPCOMING_VISIBLE_LIMIT);
+  const visibleBody = visibleItems
     .map((it, i) =>
       renderUpcomingCard(it, nextAnchor(items, i, "section-upcoming")),
     )
     .join("");
-  return `<section class="section section--upcoming" id="section-upcoming">${head}${body}</section>`;
+  const hiddenBody = hiddenItems.length
+    ? `<details class="upcoming-more"><summary><span class="label">Show all</span> <span class="n">+${hiddenItems.length}</span></summary><div class="upcoming-more__body">${hiddenItems
+        .map((it, i) =>
+          renderUpcomingCard(
+            it,
+            nextAnchor(items, i + UPCOMING_VISIBLE_LIMIT, "section-upcoming"),
+          ),
+        )
+        .join("")}</div></details>`
+    : "";
+  return `<section class="section section--upcoming" id="section-upcoming">${head}${visibleBody}${hiddenBody}</section>`;
 };
 
 const renderRecentWinsDisclosure = (items: InboxItem[]): string => {
@@ -918,6 +1071,15 @@ const renderPage = (
   const reviewSection = renderReviewSection(dashboard.review);
   const upcomingSection = renderUpcomingSection(dashboard.upcoming);
   const fyiSection = renderFyiSection(dashboard);
+  // Two-col grid only kicks in when Upcoming has something to show — with no
+  // meetings there's no right rail to render, and the layout collapses to a
+  // Review-above-FYI stack.
+  const layoutCls = dashboard.upcoming.length
+    ? "layout layout--two-col"
+    : "layout";
+  const body =
+    zeroState ||
+    `<div class="${layoutCls}">${reviewSection}${upcomingSection}${fyiSection}</div>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -934,7 +1096,7 @@ const renderPage = (
   <div class="meta">refreshed ${now} · polls every 5s</div>
 </header>
 ${renderTickBanner(tick)}
-${zeroState || reviewSection + upcomingSection + fyiSection}
+${body}
 </div>
 <script>${clientScript}</script>
 </body>
