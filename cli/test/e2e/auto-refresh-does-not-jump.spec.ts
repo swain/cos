@@ -25,6 +25,10 @@ test("auto-refresh does not reset scroll position", async ({ page }) => {
   const scrollBefore = await page.evaluate(() => window.scrollY);
   expect(scrollBefore).toBeGreaterThan(100);
 
+  await page.evaluate(() => {
+    (window as unknown as { __testSentinel: number }).__testSentinel = 42;
+  });
+
   await page.waitForResponse(
     (res) =>
       res.url().endsWith("/") &&
@@ -33,6 +37,12 @@ test("auto-refresh does not reset scroll position", async ({ page }) => {
     { timeout: 8_000 },
   );
 
+  // Sentinel survives — auto-refresh swapped the DOM in place, no full reload.
+  const sentinel = await page.evaluate(
+    () => (window as unknown as { __testSentinel?: number }).__testSentinel,
+  );
+  expect(sentinel).toBe(42);
+
   const scrollAfter = await page.evaluate(() => window.scrollY);
-  expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(50);
+  expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThanOrEqual(5);
 });
