@@ -1,9 +1,10 @@
 import type { Urgency, TriageVerdict } from "../types.js";
 
-// Top-level dashboard surface is two sections:
-// - Review: things that block the user's attention
-// - FYI: things the user can glance at or ignore
-export type Section = "review" | "fyi";
+// Top-level dashboard surface. Review and FYI are the wi-52 two-section core;
+// `upcoming` sits between them for time-sensitive calendar meetings in the next
+// 8h. `upcoming` is additive — nothing in Review/FYI moves — and hides
+// entirely when the calendar is empty.
+export type Section = "review" | "upcoming" | "fyi";
 
 export type ItemKind =
   | "notification"
@@ -15,7 +16,8 @@ export type ItemKind =
   | "pr-review"
   | "blocked-item"
   | "recent-win"
-  | "idea";
+  | "idea"
+  | "upcoming-meeting";
 
 export type IdeaMeta = {
   verdict: TriageVerdict;
@@ -46,13 +48,15 @@ export type InboxItem = {
   ideaMeta?: IdeaMeta;
 };
 
-// Dashboard is two visible sections + two sidecars:
+// Dashboard is up to three visible sections + two sidecars:
+// - review / upcoming / fyi: the attention surfaces
 // - recentWins: rendered collapsed inside FYI ("N shipped in last 24h")
 // - triagedIdeasCount: shown as a muted "N triaged ideas — browse" line
 //   so the sweep of suggest-promote/suggest-kill verdicts is one click away
 //   without crowding the attention surface
 export type InboxDashboard = {
   review: InboxItem[];
+  upcoming: InboxItem[];
   fyi: InboxItem[];
   recentWins: InboxItem[];
   triagedIdeasCount: number;
@@ -64,10 +68,11 @@ export type IdeasSectionStats = {
   unscoredTotal: number;
 };
 
-export const SECTION_ORDER: Section[] = ["review", "fyi"];
+export const SECTION_ORDER: Section[] = ["review", "upcoming", "fyi"];
 
 export const SECTION_TITLES: Record<Section, string> = {
   review: "Review",
+  upcoming: "Upcoming",
   fyi: "FYI",
 };
 
@@ -81,6 +86,7 @@ export const FYI_AUTO_READ_MS = 3 * 24 * 60 * 60 * 1000;
 
 export const flattenDashboard = (d: InboxDashboard): InboxItem[] => [
   ...d.review,
+  ...d.upcoming,
   ...d.fyi,
   ...d.recentWins,
 ];

@@ -150,8 +150,13 @@ export const cmdSignalAdd = (opts: {
   return res;
 };
 
-export const cmdCollectCalendar = (opts: { timeoutMs?: number } = {}) => {
-  const res = runCalendarCollector({ timeoutMs: opts.timeoutMs });
+export const cmdCollectCalendar = (
+  opts: { timeoutMs?: number; eventId?: string } = {},
+) => {
+  const res = runCalendarCollector({
+    timeoutMs: opts.timeoutMs,
+    eventId: opts.eventId,
+  });
   if (!res.ran) {
     console.log(chalk.gray("calendar: skipped"), res.reason ?? "");
     return;

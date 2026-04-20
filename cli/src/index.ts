@@ -264,8 +264,15 @@ program
     "Run the Google Calendar collector (spawns claude -p with MCP tools)",
   )
   .option("--timeout-ms <n>", "subprocess timeout in milliseconds", "180000")
+  .option(
+    "--event-id <id>",
+    "prepare a single named event (bypasses the default 20–30 min window filter)",
+  )
   .action((opts) =>
-    cmdCollectCalendar({ timeoutMs: parseInt(opts.timeoutMs, 10) }),
+    cmdCollectCalendar({
+      timeoutMs: parseInt(opts.timeoutMs, 10),
+      eventId: opts.eventId,
+    }),
   );
 
 program

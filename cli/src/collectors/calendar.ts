@@ -10,6 +10,25 @@ export type CalendarCollectorResult = {
   reason?: string;
 };
 
+// Preamble injected before the prompt when the caller wants prep for a single
+// named event rather than the default 20-30min window. Shipped with the prompt
+// itself so the subprocess sees it as one contiguous instruction block.
+const SINGLE_EVENT_PREAMBLE = (eventId: string) => `
+SINGLE-EVENT OVERRIDE — read this before anything else.
+
+You are being invoked to prepare exactly one event. Do NOT scan the next 2h window. Do NOT apply the 20–30 minute filter. Instead:
+
+1. Fetch the calendar event with id \`${eventId}\` on the user's primary calendar (e.g. \`mcp__claude_ai_Google_Calendar__get_event\` or the equivalent tool available to you).
+2. Run sections 3 (context gathering), 4 (write prep file), and 5 (signal + notification) of the instructions below, but ONLY for that one event. Skip sections 1 and 2 entirely.
+3. If the event is in the past, cancelled, or has no other attendees, print \`no-prep-needed\` and exit.
+4. If a prep file already exists for the event's date+slug, overwrite it — the ad-hoc Prep Now action is an explicit refresh request from the user.
+
+The rest of the prompt follows:
+
+---
+
+`;
+
 const findPromptPath = (): string => {
   const installed = join(PROMPTS_DIR, "calendar-collect.md");
   if (existsSync(installed)) return installed;
@@ -23,7 +42,7 @@ const findPromptPath = (): string => {
 };
 
 export const runCalendarCollector = (
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; eventId?: string } = {},
 ): CalendarCollectorResult => {
   const promptPath = findPromptPath();
   if (!existsSync(promptPath)) {
@@ -40,7 +59,10 @@ export const runCalendarCollector = (
       reason: `claude binary missing at ${CLAUDE_BIN}`,
     };
   }
-  const prompt = readFileSync(promptPath, "utf8");
+  const basePrompt = readFileSync(promptPath, "utf8");
+  const prompt = opts.eventId
+    ? SINGLE_EVENT_PREAMBLE(opts.eventId) + basePrompt
+    : basePrompt;
   const args = [
     "--plugin-dir",
     CLAUDE_PLUGIN_DIR,

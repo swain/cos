@@ -1,9 +1,11 @@
 import { spawn, execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "ulid";
 import { getDb, ideas, notifications, sessions, workItems } from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
 import { COS_DIR, displayWorkItemId, tmuxWindowName } from "../util.js";
+import { invalidateUpcomingCache } from "./upcoming.js";
 import type { InboxDashboard, InboxItem } from "./types.js";
 
 const COS_BIN = join(COS_DIR, "bin/cos");
@@ -369,6 +371,46 @@ export const markAllFyiRead = async (
     }
   }
   return { ok: true, message: `dismissed ${dismissed} FYI rows` };
+};
+
+// Kicks off an ad-hoc calendar prep for a single event via
+// `cos collect-calendar --event-id <id>`. The collector subprocess itself
+// takes ~2-3 minutes (it spawns claude -p), so we detach and return
+// immediately; the user's next dashboard refresh will pick up the
+// prep-ready/prep-pending state once the collector writes its file or
+// signal.
+export const prepMeetingNow = async (
+  eventId: string,
+): Promise<ActionResult> => {
+  if (!eventId) return { ok: false, message: "no event id" };
+  try {
+    const child = spawn(COS_BIN, ["collect-calendar", "--event-id", eventId], {
+      stdio: "ignore",
+      detached: true,
+    });
+    child.unref();
+  } catch (e) {
+    return { ok: false, message: `failed to spawn collector: ${String(e)}` };
+  }
+  invalidateUpcomingCache();
+  return { ok: true, message: `queued prep for ${eventId}` };
+};
+
+// Opens the prep .md file in the user's default macOS handler. darwin-only.
+export const openPrepFile = async (path: string): Promise<ActionResult> => {
+  if (!path) return { ok: false, message: "no prep path" };
+  if (!path.startsWith(COS_DIR))
+    return { ok: false, message: "prep path outside cos dir" };
+  if (!existsSync(path))
+    return { ok: false, message: `prep file not found: ${path}` };
+  if (process.platform !== "darwin")
+    return { ok: false, message: `open not supported on ${process.platform}` };
+  try {
+    spawn("open", [path], { stdio: "ignore", detached: true }).unref();
+  } catch (e) {
+    return { ok: false, message: `failed to open: ${String(e)}` };
+  }
+  return { ok: true, message: `opened ${path}` };
 };
 
 // Launches `cos review <pr-url>` in a new Terminal window. The user drives

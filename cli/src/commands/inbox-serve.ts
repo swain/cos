@@ -21,7 +21,9 @@ import {
   killSession,
   markAllFyiRead,
   markPrReviewed,
+  openPrepFile,
   peekSession,
+  prepMeetingNow,
   promoteIdea,
   retrySession,
   retryWorkItem,
@@ -37,6 +39,7 @@ import {
   type InboxDashboard,
   type InboxItem,
 } from "../inbox/types.js";
+import { invalidateUpcomingCache } from "../inbox/upcoming.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.COS_INBOX_PORT) || 4411;
@@ -456,6 +459,34 @@ body {
 }
 
 .confirm { color: var(--amber); font-size: 12px; margin-left: 10px; }
+
+/* ----- Upcoming meetings ----- */
+.card--upcoming { border-left-color: var(--accent); }
+.card--upcoming-pending { border-left-color: var(--amber); }
+.card--upcoming-ready { border-left-color: var(--green); }
+.card__when {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-right: 10px;
+}
+.prep-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--rule-strong);
+  color: var(--muted);
+  background: var(--paper);
+}
+.prep-badge--ready { color: var(--green-fg); background: var(--green-bg); border-color: var(--green); }
+.prep-badge--pending { color: var(--amber); background: var(--amber-bg); border-color: var(--amber); }
+.prep-badge--none { color: var(--muted); background: var(--paper); border-color: var(--rule-strong); }
 `;
 
 const isHttpUrl = (s: string): boolean =>
@@ -715,6 +746,88 @@ const renderReviewSection = (items: InboxItem[]): string => {
   return `<section class="section section--review" id="section-review">${head}${body}</section>`;
 };
 
+const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
+  const meta = item.meta ?? {};
+  const relative = String(meta.relative ?? "");
+  const absolute = String(meta.absolute ?? "");
+  const attendees = Number(meta.attendees ?? 0);
+  const prepStatus = String(meta.prepStatus ?? "no-prep") as
+    | "prep-ready"
+    | "prep-pending"
+    | "no-prep";
+  const prepPath =
+    meta.prepPath === null || meta.prepPath === undefined
+      ? ""
+      : String(meta.prepPath);
+  const hangoutLink =
+    meta.hangoutLink === null || meta.hangoutLink === undefined
+      ? ""
+      : String(meta.hangoutLink);
+
+  const badgeLabel = prepStatus
+    .replace("prep-", "prep ")
+    .replace("no prep", "no prep");
+  const badgeCls =
+    prepStatus === "prep-ready"
+      ? "prep-badge prep-badge--ready"
+      : prepStatus === "prep-pending"
+        ? "prep-badge prep-badge--pending"
+        : "prep-badge prep-badge--none";
+  const accent =
+    prepStatus === "prep-ready"
+      ? "card--upcoming-ready"
+      : prepStatus === "prep-pending"
+        ? "card--upcoming-pending"
+        : "card--upcoming";
+  const id = encodeURIComponent(item.id);
+  const openPrepBtn =
+    prepPath && prepStatus === "prep-ready"
+      ? `<form method="post" action="/meetings/${id}/open-prep">${hiddenReturn(returnTo)}<input type="hidden" name="prepPath" value="${escapeHtml(prepPath)}"><button class="btn btn--primary">Open prep</button></form>`
+      : "";
+  const prepNowBtn =
+    prepStatus !== "prep-ready"
+      ? `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn">${prepStatus === "prep-pending" ? "Refresh prep" : "Prep now"}</button></form>`
+      : "";
+  const hangoutBtn = hangoutLink
+    ? `<a class="btn btn--muted" href="${escapeHtml(hangoutLink)}" target="_blank" rel="noopener">join</a>`
+    : "";
+  const attendeeLabel =
+    attendees === 1 ? "1 attendee" : `${attendees} attendees`;
+
+  return `
+<article class="card ${accent}" id="row-${escapeHtml(item.key)}">
+  <div class="card__head">
+    <div class="card__body">
+      <div class="card__subject"><span class="card__when">${escapeHtml(relative)}</span>${escapeHtml(item.subject)}</div>
+      <div class="card__meta">
+        <span class="${badgeCls}">${escapeHtml(badgeLabel)}</span>
+        <span>${escapeHtml(absolute)}</span>
+        <span>${escapeHtml(attendeeLabel)}</span>
+      </div>
+    </div>
+    <div class="actions">${openPrepBtn}${prepNowBtn}${hangoutBtn}</div>
+  </div>
+</article>`;
+};
+
+const renderUpcomingSection = (items: InboxItem[]): string => {
+  if (!items.length) return "";
+  const head = `<div class="section__head">
+      <div>
+        <h2 class="section__title">${SECTION_TITLES.upcoming}</h2>
+      </div>
+      <div class="section__head-actions">
+        <span class="section__count">${items.length} ${items.length === 1 ? "meeting" : "meetings"}</span>
+      </div>
+    </div>`;
+  const body = items
+    .map((it, i) =>
+      renderUpcomingCard(it, nextAnchor(items, i, "section-upcoming")),
+    )
+    .join("");
+  return `<section class="section section--upcoming" id="section-upcoming">${head}${body}</section>`;
+};
+
 const renderRecentWinsDisclosure = (items: InboxItem[]): string => {
   if (!items.length) return "";
   // Stay-open on reload: add `open` whenever returnTo lands here, so dismissing
@@ -797,10 +910,13 @@ const renderPage = (
   const total = dashboard.review.length + dashboard.fyi.length;
   const now = new Date().toLocaleTimeString();
   const zeroState =
-    total === 0 && dashboard.recentWins.length === 0
+    total === 0 &&
+    dashboard.recentWins.length === 0 &&
+    dashboard.upcoming.length === 0
       ? `<div class="zero-state">Inbox empty. Po has nothing for you.<span class="sig">— Po</span></div>`
       : "";
   const reviewSection = renderReviewSection(dashboard.review);
+  const upcomingSection = renderUpcomingSection(dashboard.upcoming);
   const fyiSection = renderFyiSection(dashboard);
   return `<!doctype html>
 <html lang="en">
@@ -818,7 +934,7 @@ const renderPage = (
   <div class="meta">refreshed ${now} · polls every 5s</div>
 </header>
 ${renderTickBanner(tick)}
-${zeroState || reviewSection + fyiSection}
+${zeroState || reviewSection + upcomingSection + fyiSection}
 </div>
 <script>${clientScript}</script>
 </body>
@@ -978,6 +1094,21 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       [
         /^\/ideas\/([^/]+)\/accept$/,
         (m) => acceptIdea(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/meetings\/([^/]+)\/prep-now$/,
+        (m) => prepMeetingNow(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/meetings\/([^/]+)\/open-prep$/,
+        () => openPrepFile(form.prepPath ?? ""),
+      ],
+      [
+        /^\/meetings\/reload$/,
+        async () => {
+          invalidateUpcomingCache();
+          return { ok: true as const, message: "invalidated upcoming cache" };
+        },
       ],
     ];
 

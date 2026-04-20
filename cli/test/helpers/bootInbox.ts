@@ -44,6 +44,7 @@ export const bootInbox = async (opts: BootInboxOpts): Promise<BootedInbox> => {
       ...process.env,
       COS_DB_PATH: opts.dbPath,
       COS_INBOX_PORT: String(opts.port),
+      COS_DISABLE_UPCOMING: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
