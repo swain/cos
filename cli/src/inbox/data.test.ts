@@ -10,6 +10,7 @@ process.env.COS_DB_PATH = join(tmp, "fleet.db");
 import {
   collectDashboard,
   collectIdeasStats,
+  pickUpcomingEmptyQuip,
   UPCOMING_EMPTY_QUIPS,
 } from "./data.js";
 import {
@@ -199,6 +200,21 @@ describe("upcoming empty state — synthetic Po signoff card", () => {
       expect(q).not.toMatch(/!/);
       expect(q).not.toMatch(/\p{Extended_Pictographic}/u);
     }
+  });
+
+  it("quip is stable within the same clock hour and flips at the boundary", () => {
+    const hour = 3_600_000;
+    const base = Date.UTC(2026, 3, 20, 12, 0, 0);
+    const a = pickUpcomingEmptyQuip(base);
+    const b = pickUpcomingEmptyQuip(base + hour - 1);
+    const c = pickUpcomingEmptyQuip(base + hour);
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+
+  it("quip derives from the hour bucket, not randomness — identical inputs give identical outputs", () => {
+    const t = Date.UTC(2026, 3, 20, 15, 30, 0);
+    expect(pickUpcomingEmptyQuip(t)).toBe(pickUpcomingEmptyQuip(t));
   });
 });
 
