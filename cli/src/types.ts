@@ -172,6 +172,25 @@ export const FollowupSchema = z.object({
 });
 export type Followup = z.infer<typeof FollowupSchema>;
 
+export const PlanStatusSchema = z.enum([
+  "awaiting-review",
+  "approved",
+  "feedback",
+  "superseded",
+]);
+export type PlanStatus = z.infer<typeof PlanStatusSchema>;
+
+export const PlanSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string().nullable(),
+  path: z.string(),
+  status: PlanStatusSchema,
+  feedback_body: z.string().nullable(),
+  created_at: z.string(),
+  reviewed_at: z.string().nullable(),
+});
+export type Plan = z.infer<typeof PlanSchema>;
+
 export const RecurringTaskStatusSchema = z.enum(["ok", "failed"]);
 export type RecurringTaskStatus = z.infer<typeof RecurringTaskStatusSchema>;
 

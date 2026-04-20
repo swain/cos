@@ -12,11 +12,13 @@ import {
 import {
   acceptIdea,
   ackNotification,
+  approvePlan,
   approveWorkItem,
   abandonWorkItem,
   archiveWorkItem,
   bumpWorkItem,
   deferIdea,
+  dismissPlan,
   dismissSession,
   dispatchWorkItem,
   enqueueInboxResponse,
@@ -32,12 +34,15 @@ import {
   retrySession,
   retryWorkItem,
   reviewInPlannotator,
+  reviewPlanInPlannotator,
   snoozeWorkItem,
   startReviewQueue,
+  submitPlanFeedback,
   suppressSignal,
   viewFailureLog,
   type ActionResult,
 } from "../inbox/actions.js";
+import { plans } from "../db.js";
 import {
   SECTION_TITLES,
   type InboxDashboard,
@@ -1044,6 +1049,7 @@ const btn = (
 
 const cardAccentClass = (item: InboxItem): string => {
   if (item.kind === "pr-review") return "card--pr";
+  if (item.kind === "plan-review") return "card--pr";
   if (item.kind === "blocked-item") return "card--blocked";
   if (item.kind === "work-item") return "card--approval";
   if (item.kind === "idea") return "card--idea-your-call";
@@ -1063,6 +1069,26 @@ const renderReviewActions = (item: InboxItem, returnTo: string): string => {
   const key = encodeURIComponent(item.key);
   const rtn = hiddenReturn(returnTo);
   switch (item.kind) {
+    case "plan-review": {
+      // "Review plan" spawns plannotator-annotate on the plan markdown in a
+      // new Terminal; on exit the wrapper prompts approve/feedback/skip and
+      // persists the decision back to the plans row. Approve / Dismiss on
+      // the row itself are shortcuts for users confident without reading.
+      const review = `<form method="post" action="/plans/${id}/review-plannotator">${rtn}<button class="btn btn--primary">Review plan</button></form>`;
+      const approve = btn(
+        `/plans/${id}/approve`,
+        "approve",
+        returnTo,
+        "btn btn--promote",
+      );
+      const dismiss = btn(
+        `/plans/${id}/dismiss`,
+        "dismiss",
+        returnTo,
+        "btn btn--muted",
+      );
+      return review + approve + dismiss;
+    }
     case "pr-review": {
       const pr = item.related_ids.find(isHttpUrl);
       const primary = pr
@@ -1810,6 +1836,21 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       res.end(page.html);
       return;
     }
+    const planGet = method === "GET" && path.match(/^\/plans\/([^/]+)$/);
+    if (planGet) {
+      const planId = decodeURIComponent(planGet[1]);
+      const p = plans.get(planId);
+      if (!p) return sendText(res, 404, `plan not found: ${planId}`);
+      let md = "";
+      try {
+        md = readFileSync(p.path, "utf8");
+      } catch (e: any) {
+        return sendText(res, 500, `could not read plan file: ${e.message}`);
+      }
+      res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
+      res.end(md);
+      return;
+    }
     if (method !== "POST") {
       sendText(res, 404, "not found");
       return;
@@ -1863,6 +1904,23 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       [
         /^\/work-items\/([^/]+)\/review-plannotator$/,
         () => reviewInPlannotator(form.prUrl ?? ""),
+      ],
+      [
+        /^\/plans\/([^/]+)\/approve$/,
+        (m) => approvePlan(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/plans\/([^/]+)\/dismiss$/,
+        (m) => dismissPlan(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/plans\/([^/]+)\/review-plannotator$/,
+        (m) => reviewPlanInPlannotator(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/plans\/([^/]+)\/feedback$/,
+        (m) =>
+          submitPlanFeedback(decodeURIComponent(m[1]), form.feedback ?? ""),
       ],
       [
         /^\/signals\/([^/]+)\/suppress$/,

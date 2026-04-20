@@ -5,6 +5,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { workItems, sessions, kv } from "../db.js";
+import { buildPlanApprovedAddendum } from "./plans.js";
 import type { WorkItem, SessionKind } from "../types.js";
 import {
   COS_DIR,
@@ -284,7 +285,15 @@ export const cmdWorkerPrompt = (workItemRef: string, sessionId: string) => {
 // rather than open a second PR. The addendum is the only signal the worker
 // gets — inject it front-and-center so rule 5 (open PR) does not override.
 export const buildModeAddendum = (wi: WorkItem, sessionId: string): string => {
-  if (!wi.pr_urls.length) return "";
+  // PR-open takes precedence: if a WI is being resumed for reviewer comments,
+  // that supersedes any stale approved plan that may still be on file.
+  if (wi.pr_urls.length) return buildFixCommentsAddendum(wi, sessionId);
+  const planAddendum = buildPlanApprovedAddendum(wi.id);
+  if (planAddendum) return planAddendum;
+  return "";
+};
+
+const buildFixCommentsAddendum = (wi: WorkItem, sessionId: string): string => {
   const prUrl = wi.pr_urls[wi.pr_urls.length - 1];
   return [
     "> **Fix-comments mode — you are resuming this work item.**",

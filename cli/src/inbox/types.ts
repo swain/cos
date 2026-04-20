@@ -14,6 +14,7 @@ export type ItemKind =
   | "worker"
   | "queue-item"
   | "pr-review"
+  | "plan-review"
   | "blocked-item"
   | "recent-win"
   | "idea"
