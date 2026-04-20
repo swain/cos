@@ -370,14 +370,62 @@ const triagedIdeasCount = (): number =>
           i.triage_verdict === "suggest-kill"),
     ).length;
 
+// Po-voice one-liners for the Upcoming empty state. Picked at random per
+// render — the variety is the point, not persistence. Voice: dry, first
+// person, mildly sardonic, no emoji, no exclamation, one sentence, ≤100 chars.
+export const UPCOMING_EMPTY_QUIPS: readonly string[] = [
+  "Nothing in the next 8 hours. Rarest state in your life — don't waste it on Slack.",
+  "Calendar quiet. If you want it to stay that way, stop saying yes.",
+  "Clear diary. Touch grass.",
+  "No meetings scheduled. Statistically, one is about to be added.",
+  "Free block. Take the focus time before someone claims it.",
+  "Calendar empty. This is either productive time or a warning shot.",
+  "No upcoming meetings. Ship something.",
+  "Clean window. A PR awaits your review.",
+  "Nothing on the books. Enjoy it or ruin it — your call.",
+  "No meetings in view. Either a gift or a bug in my collector — probably a gift.",
+  "Eight empty hours. Do the work only you can do.",
+  "Calendar has nothing for me to prep. Good — prep yourself instead.",
+  "No meetings queued. Use it, or the afternoon will use you.",
+  "Nothing incoming. The inbox is not a substitute task.",
+  "Clear runway. Land something that mattered last month.",
+];
+
+export const pickUpcomingEmptyQuip = (): string => {
+  const i = Math.floor(Math.random() * UPCOMING_EMPTY_QUIPS.length);
+  return UPCOMING_EMPTY_QUIPS[i];
+};
+
+const upcomingEmptyItem = (): InboxItem => ({
+  key: "upcoming-empty",
+  kind: "upcoming-empty",
+  id: "upcoming-empty",
+  section: "upcoming",
+  urgency: "digest",
+  subject: pickUpcomingEmptyQuip(),
+  body: "",
+  related_ids: [],
+  created_at: new Date().toISOString(),
+});
+
 export const collectDashboard = (): InboxDashboard => {
   const displayIds = wiDisplayIdMap();
+  const review = reviewItems().sort((a, b) =>
+    b.created_at.localeCompare(a.created_at),
+  );
+  const upcomingReal = upcomingMeetingsItems();
+  const fyi = fyiItems(displayIds);
+  // Synthesize a Po-signed empty-state card only when another attention
+  // surface has content. With everything empty the page falls through to
+  // the full-inbox zero-state, which already carries a Po signoff.
+  const upcoming =
+    upcomingReal.length === 0 && review.length + fyi.length > 0
+      ? [upcomingEmptyItem()]
+      : upcomingReal;
   return {
-    review: reviewItems().sort((a, b) =>
-      b.created_at.localeCompare(a.created_at),
-    ),
-    upcoming: upcomingMeetingsItems(),
-    fyi: fyiItems(displayIds),
+    review,
+    upcoming,
+    fyi,
     recentWins: recentWinItems(),
     triagedIdeasCount: triagedIdeasCount(),
   };
