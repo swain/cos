@@ -61,6 +61,14 @@ import {
   cmdFollowupMarkAddressed,
 } from "./commands/followups.js";
 import { cmdPlan } from "./commands/plan.js";
+import {
+  cmdPlanApprove,
+  cmdPlanResubmit,
+  cmdPlanReview,
+  cmdPlanStatus,
+  cmdPlanSubmit,
+  cmdPlanSupersede,
+} from "./commands/plans.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -196,6 +204,51 @@ program
       fromFile: opts.fromFile,
     }),
   );
+
+program
+  .command("plan-submit <workItemId>")
+  .description(
+    "Persist a written plan markdown and queue it for user review in the inbox",
+  )
+  .requiredOption("--path <path>", "absolute path to the plan .md file")
+  .action((id, opts) => cmdPlanSubmit(id, { path: opts.path }));
+
+program
+  .command("plan-status <planId>")
+  .description("Print the plan row as JSON")
+  .action((id) => cmdPlanStatus(id));
+
+program
+  .command("plan-approve <planId>")
+  .description(
+    "Mark a plan approved and redispatch its work item (worker runs against the approved plan)",
+  )
+  .action(async (id) => {
+    await cmdPlanApprove(id);
+  });
+
+program
+  .command("plan-resubmit <planId>")
+  .description(
+    "Record reviewer feedback on a plan and spawn a re-plan worker that regenerates with feedback in context",
+  )
+  .option("--feedback <body>", "feedback/comment bundle (markdown)", "")
+  .action((id, opts) => cmdPlanResubmit(id, { feedback: opts.feedback }));
+
+program
+  .command("plan-review <planId>")
+  .description(
+    "Interactive plan review: open plannotator on the plan markdown, then approve / send feedback / skip",
+  )
+  .action(async (id) => {
+    await cmdPlanReview(id);
+  });
+
+program
+  .command("plan-supersede <planId>")
+  .description("Mark a plan superseded (dashboard Dismiss / doctor age-out)")
+  .option("--note <note>", "short reason (appended to plan markdown)")
+  .action((id, opts) => cmdPlanSupersede(id, opts.note));
 
 program
   .command("wi-set-deps <workItemId>")

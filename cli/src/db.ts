@@ -21,6 +21,8 @@ import type {
   Notification,
   RecurringTask,
   Followup,
+  Plan,
+  PlanStatus,
 } from "./types.js";
 
 let _db: Database.Database | null = null;
@@ -113,6 +115,12 @@ const migrate = (db: Database.Database) => {
   );
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_ideas_triaged_at ON ideas(triaged_at)`,
+  );
+  // wi-62: plans table ships on pre-existing DBs via CREATE-IF-NOT-EXISTS in
+  // schema.sql, so no ALTERs are needed here. Indexes are idempotent.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_plans_work_item ON plans(work_item_id)`,
   );
   // Backfill num in created_at order (earliest = 1) and slug from title.
   const missing = db
@@ -843,6 +851,80 @@ export const meetingPrepRuns = {
         )
         .all() as any[]
     ).map(rowToMeetingPrepRun);
+  },
+};
+
+const rowToPlan = (r: any): Plan => ({
+  id: r.id,
+  work_item_id: r.work_item_id ?? null,
+  path: r.path,
+  status: r.status,
+  feedback_body: r.feedback_body ?? null,
+  created_at: r.created_at,
+  reviewed_at: r.reviewed_at ?? null,
+});
+
+export const plans = {
+  insert(
+    p: Omit<Plan, "created_at" | "reviewed_at" | "feedback_body" | "status"> & {
+      status?: PlanStatus;
+    },
+  ) {
+    getDb()
+      .prepare(
+        `INSERT INTO plans (id, work_item_id, path, status)
+         VALUES (@id, @work_item_id, @path, @status)`,
+      )
+      .run({
+        id: p.id,
+        work_item_id: p.work_item_id,
+        path: p.path,
+        status: p.status ?? "awaiting-review",
+      });
+  },
+  get(id: string): Plan | null {
+    const r = getDb()
+      .prepare(`SELECT * FROM plans WHERE id = ?`)
+      .get(id) as any;
+    return r ? rowToPlan(r) : null;
+  },
+  list(filter?: { status?: PlanStatus; workItemId?: string }): Plan[] {
+    let sql = `SELECT * FROM plans WHERE 1=1`;
+    const params: any = {};
+    if (filter?.status) {
+      sql += ` AND status = @status`;
+      params.status = filter.status;
+    }
+    if (filter?.workItemId) {
+      sql += ` AND work_item_id = @workItemId`;
+      params.workItemId = filter.workItemId;
+    }
+    sql += ` ORDER BY created_at DESC`;
+    return (getDb().prepare(sql).all(params) as any[]).map(rowToPlan);
+  },
+  // Latest approved plan for a work item — used by the worker prompt so a
+  // redispatch after approval executes against the reviewed plan.
+  latestApprovedForWorkItem(workItemId: string): Plan | null {
+    const r = getDb()
+      .prepare(
+        `SELECT * FROM plans WHERE work_item_id = ? AND status = 'approved'
+         ORDER BY reviewed_at DESC LIMIT 1`,
+      )
+      .get(workItemId) as any;
+    return r ? rowToPlan(r) : null;
+  },
+  update(id: string, patch: Partial<Plan>) {
+    const sets: string[] = [];
+    const params: any = { id };
+    for (const [k, v] of Object.entries(patch)) {
+      if (k === "id" || v === undefined) continue;
+      sets.push(`${k} = @${k}`);
+      params[k] = v;
+    }
+    if (!sets.length) return;
+    getDb()
+      .prepare(`UPDATE plans SET ${sets.join(", ")} WHERE id = @id`)
+      .run(params);
   },
 };
 

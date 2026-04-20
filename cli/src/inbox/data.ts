@@ -7,7 +7,9 @@ import {
   cronTicks,
   cosLog,
   ideas,
+  plans,
 } from "../db.js";
+import { summarizePlan } from "../commands/plans.js";
 import { displayWorkItemId } from "../util.js";
 import type { Idea, TriageVerdict, WorkItem } from "../types.js";
 import {
@@ -208,6 +210,28 @@ const reviewItems = (): InboxItem[] => {
         priority: wi.priority,
         repos: reposLabel(wi.repos),
         reason: lastSession ?? "",
+      },
+    });
+  }
+
+  for (const p of plans.list({ status: "awaiting-review" })) {
+    const { title, blurb } = summarizePlan(p.path);
+    const linkedWi = p.work_item_id ? workItems.get(p.work_item_id) : null;
+    const wiLabel = linkedWi ? displayWorkItemId(linkedWi) : null;
+    items.push({
+      key: `plan-review:${p.id}`,
+      kind: "plan-review",
+      id: p.id,
+      displayLabel: wiLabel ?? p.id,
+      section: "review",
+      urgency: "urgent",
+      subject: title,
+      body: trimBody(blurb || `Plan awaiting review — ${p.path}`, 240),
+      related_ids: wiLabel ? [wiLabel] : [],
+      created_at: p.created_at,
+      meta: {
+        path: p.path,
+        wi: wiLabel,
       },
     });
   }

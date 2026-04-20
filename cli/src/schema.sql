@@ -139,6 +139,22 @@ CREATE TABLE IF NOT EXISTS meeting_prep_runs (
 CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_event ON meeting_prep_runs(event_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_status ON meeting_prep_runs(status);
 
+-- Plans awaiting / post user review. Surfaces in the dashboard Review section
+-- (alongside PR-review rows). Lifecycle: awaiting-review → approved | feedback
+-- | superseded. `feedback_body` holds the inline comment bundle written back
+-- by plannotator on "send feedback"; resubmit reads it as prompt context.
+CREATE TABLE IF NOT EXISTS plans (
+  id            TEXT PRIMARY KEY,
+  work_item_id  TEXT,
+  path          TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'awaiting-review',
+  feedback_body TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  reviewed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+CREATE INDEX IF NOT EXISTS idx_plans_work_item ON plans(work_item_id);
+
 CREATE TABLE IF NOT EXISTS recurring_tasks (
   id             TEXT PRIMARY KEY,
   title          TEXT NOT NULL,

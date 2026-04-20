@@ -566,6 +566,67 @@ export const openPrepFile = async (path: string): Promise<ActionResult> => {
   return { ok: true, message: `opened ${path}` };
 };
 
+export const approvePlan = async (planId: string): Promise<ActionResult> => {
+  const r = await runCos(["plan-approve", planId]);
+  return r.ok
+    ? { ok: true, message: `approved ${planId}` }
+    : {
+        ok: false,
+        message: `approve failed: ${r.stderr.trim().split("\n")[0] || "unknown"}`,
+      };
+};
+
+export const dismissPlan = async (planId: string): Promise<ActionResult> => {
+  const r = await runCos([
+    "plan-supersede",
+    planId,
+    "--note",
+    "dismissed from inbox",
+  ]);
+  return r.ok
+    ? { ok: true, message: `dismissed ${planId}` }
+    : {
+        ok: false,
+        message: `dismiss failed: ${r.stderr.trim().split("\n")[0] || "unknown"}`,
+      };
+};
+
+export const submitPlanFeedback = async (
+  planId: string,
+  body: string,
+): Promise<ActionResult> => {
+  if (!body.trim()) return { ok: false, message: "empty feedback" };
+  const r = await runCos(["plan-resubmit", planId, "--feedback", body]);
+  return r.ok
+    ? { ok: true, message: `feedback recorded for ${planId}` }
+    : {
+        ok: false,
+        message: `feedback failed: ${r.stderr.trim().split("\n")[0] || "unknown"}`,
+      };
+};
+
+// Opens `cos plan-review <plan-id>` in a new Terminal window. Plannotator
+// drives the highlight/comment UI; the wrapper prompts for approve /
+// feedback / skip on exit and persists the decision back to the plans row.
+export const reviewPlanInPlannotator = async (
+  planId: string,
+): Promise<ActionResult> => {
+  if (!planId) return { ok: false, message: "no plan id" };
+  const cmd = `${shellQuote(COS_BIN)} plan-review ${shellQuote(planId)}`;
+  if (!openTerminalRunning(cmd)) {
+    return {
+      ok: false,
+      message: `run manually: cos plan-review ${planId}`,
+      detail: `run manually: cos plan-review ${planId}`,
+    };
+  }
+  return {
+    ok: true,
+    message: `opened plannotator for plan ${planId}`,
+    detail: `running in new Terminal: cos plan-review ${planId}`,
+  };
+};
+
 // Launches `cos review <pr-url>` in a new Terminal window. The user drives
 // plannotator there and, on exit, is prompted to mirror the decision to
 // GitHub via `gh pr review`. See cmdReviewPr in commands/review-pr.ts.

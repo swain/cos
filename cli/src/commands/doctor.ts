@@ -14,6 +14,7 @@ import {
   sessions as sessionsApi,
   cosLog,
   notifications,
+  plans as plansApi,
 } from "../db.js";
 import {
   CONFIG_JSON,
@@ -31,6 +32,7 @@ const DEFAULT_STALE_MINUTES = 20;
 const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
 const DEFAULT_SESSION_ARCHIVE_DAYS = 7;
+const DEFAULT_PLAN_AGEOUT_DAYS = 7;
 
 // Doctor mutations that transition a session to a terminal state may only
 // touch rows whose status is in this set. Without this guard, an already-
@@ -860,6 +862,42 @@ export const checkInvariant11PlannedParentRollup = (
   return f;
 };
 
+// Invariant 12: plans stuck at awaiting-review beyond the age-out threshold
+// are auto-superseded so the dashboard Review section doesn't accumulate a
+// tail of plans the user silently abandoned.
+export const checkInvariant12PlanAgeout = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("plan-awaiting-review-ageout", "info");
+  const cfg = readConfig() as { plan_ageout_days?: number };
+  const days = cfg.plan_ageout_days ?? DEFAULT_PLAN_AGEOUT_DAYS;
+  const cutoffMs = Date.now() - days * 86_400_000;
+  const candidates = plansApi
+    .list({ status: "awaiting-review" })
+    .filter((p) => new Date(p.created_at).getTime() < cutoffMs);
+  if (!candidates.length) return f;
+  f.ok = false;
+  for (const p of candidates) {
+    f.entries.push({
+      id: p.id,
+      reason: `plan awaiting-review older than ${days}d`,
+      details: {
+        created_at: p.created_at,
+        work_item_id: p.work_item_id,
+        path: p.path,
+      },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      plansApi.update(p.id, {
+        status: "superseded",
+        reviewed_at: nowIso(),
+      });
+      f.fixed.push({ id: p.id, action: `status awaiting-review → superseded` });
+    }
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -873,6 +911,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant9StrandedWorkItem(opts),
     checkInvariant10OldSessionArchive(opts),
     checkInvariant11PlannedParentRollup(opts),
+    checkInvariant12PlanAgeout(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);

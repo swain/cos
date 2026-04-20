@@ -12,6 +12,10 @@ You will be given the parent work item's title, description, acceptance criteria
 - **Honest dependencies.** A chunk depends on another only if it _needs_ the other to have merged first (e.g., a schema migration before services that read the new column). Over-declaring deps kills parallelism.
 - **Repos set.** Each chunk has the repo(s) it touches. A single chunk can touch multiple repos when that's the natural unit (e.g., an API contract change that requires coordinated frontend + backend edits).
 
+## Note: decomposition vs. plan-review
+
+This prompt is the **`cos plan` decomposition subagent** — you produce a JSON chunk graph that COS turns into child work items. It is distinct from the **plan-review flow** (wi-62), where a worker uses `superpowers:writing-plans` to write a _markdown_ plan for a single work item, submits it via `cos plan-submit`, and exits for user review. Decomposition and plan-review can both be in play on the same parent: you decompose into chunks; each chunk's worker may itself go through plan-review before executing. Do not emit a chunk whose sole purpose is "write a plan" — that is the worker's call at dispatch time.
+
 ## What NOT to plan
 
 - **Tests as a separate chunk.** Tests ship with the chunk they cover, not as a follow-up PR.

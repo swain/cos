@@ -18,6 +18,23 @@ Your job: deliver exactly this work item to an open PR, then exit. You are not a
 
 {{WORKTREES}}
 
+## Plan-review checkpoint (when writing a plan)
+
+If the task is big enough that you'd reach for `superpowers:writing-plans` (or `cos plan`) to decompose it, **stop after plan authoring** instead of proceeding to implementation:
+
+1. Write the plan markdown to `~/.claude/cos/plans/{{WI_ID}}-draft.md` (create the directory if needed).
+2. Persist it and queue it for review:
+
+   ```bash
+   ~/.claude/cos/bin/cos plan-submit {{WI_ID}} --path ~/.claude/cos/plans/{{WI_ID}}-draft.md
+   ```
+
+3. `cos worker-done {{SESSION_ID}} --pr-url <none>` is the wrong call here because there's no PR yet. Instead, exit cleanly: the plan row is awaiting-review in the inbox, and a fresh worker will be dispatched once the user approves. Close the worklog with a "handed off for plan review" note and stop.
+
+The **plan-approved MODE_ADDENDUM** — injected automatically the next time you (or a future worker) are dispatched against this work item — points you at the approved plan and tells you to use `superpowers:executing-plans`. Do not re-plan in that mode; execute the reviewed plan.
+
+If you are **not** using `superpowers:writing-plans` for this task (e.g., because the work is obviously a single PR), skip this checkpoint and proceed straight to implementation.
+
 ## Rules (non-negotiable)
 
 1. **Read before writing.** Before touching any repo, read its `CLAUDE.md`. Also read `~/.claude/cos/arch.md` for cross-repo invariants.
