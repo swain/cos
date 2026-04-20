@@ -4,7 +4,7 @@ import { E2E_DB_PATH } from "../helpers/env.js";
 
 test.use({ viewport: { width: 1024, height: 600 } });
 
-test("clicking an action preserves scroll position (does not jump to top)", async ({
+test("clicking an action preserves scroll exactly (no full navigation)", async ({
   page,
 }) => {
   const db = openSeedDb(E2E_DB_PATH);
@@ -24,6 +24,12 @@ test("clicking an action preserves scroll position (does not jump to top)", asyn
 
   await page.goto("/");
 
+  // Sentinel survives everything except a full document navigation. If the
+  // action click triggers a real submit/reload, this value resets.
+  await page.evaluate(() => {
+    (window as unknown as { __testSentinel: number }).__testSentinel = 42;
+  });
+
   const targetIdx = 6;
   const targetSel = `#row-blocked-item\\:${ids[targetIdx]}`;
   await page.locator(targetSel).scrollIntoViewIfNeeded();
@@ -37,7 +43,14 @@ test("clicking an action preserves scroll position (does not jump to top)", asyn
 
   await expect(page.locator(targetSel)).toHaveCount(0);
 
+  // No full-document navigation happened — sentinel is intact.
+  const sentinel = await page.evaluate(
+    () => (window as unknown as { __testSentinel?: number }).__testSentinel,
+  );
+  expect(sentinel).toBe(42);
+
   const scrollAfter = await page.evaluate(() => window.scrollY);
   expect(scrollAfter).toBeGreaterThan(100);
-  expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(250);
+  // Strict ±5px tolerance: the JS swap should not visibly move the viewport.
+  expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThanOrEqual(5);
 });

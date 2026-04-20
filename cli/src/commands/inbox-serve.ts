@@ -499,6 +499,23 @@ body {
   line-height: 1.5;
 }
 
+/* Action-output dialog — shows plain-text output from actions that shell out
+   (review-plannotator, peek-session, view-failure-log, etc). Borrows the
+   po-dialog chrome; the body is a preformatted block so ANSI/line breaks
+   survive. */
+.action-output__body {
+  margin: 0;
+  padding: 24px 32px 32px;
+  overflow: auto;
+  max-height: calc(85vh - 52px);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .masthead h1 {
   font-family: var(--font-display);
   font-weight: 400;
@@ -1576,28 +1593,114 @@ const renderTickBanner = (tick: CronTickStatus | null): string => {
 };
 
 const clientScript = `(function(){
-  var dlg = document.getElementById('po-dialog');
-  // Use document-level delegation because the masthead lives inside #inbox-main
-  // and gets innerHTML-replaced every 5s by the refresh loop below — any
-  // listener bound to the button directly would evaporate on first poll.
-  if (dlg) {
-    document.addEventListener('click', function(e){
-      var t = e.target;
-      if (!(t instanceof Element)) return;
-      if (t.closest('#po-mark-btn')) {
-        e.preventDefault();
-        if (typeof dlg.showModal === 'function') dlg.showModal();
-        else dlg.setAttribute('open', '');
-        return;
-      }
-      if (t.closest('.po-dialog__close')) { dlg.close(); return; }
-    });
-    dlg.addEventListener('click', function(e){
-      if (e.target === dlg) dlg.close();
-    });
-  }
+  // Own scroll restoration — otherwise the browser will helpfully scroll us
+  // back to wherever it thinks we were on any navigation-like event.
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
-  if (typeof fetch !== 'function' || typeof DOMParser !== 'function') return;
+  var poDlg = document.getElementById('po-dialog');
+  var outDlg = document.getElementById('action-output');
+  var outPre = document.getElementById('action-output-body');
+  var outTitle = document.getElementById('action-output-title');
+  // Use document-level delegation because the masthead lives inside #inbox-main
+  // and gets innerHTML-replaced on every swap — any listener bound to buttons
+  // directly would evaporate on first swap.
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (!(t instanceof Element)) return;
+    if (poDlg && t.closest('#po-mark-btn')) {
+      e.preventDefault();
+      if (typeof poDlg.showModal === 'function') poDlg.showModal();
+      else poDlg.setAttribute('open', '');
+      return;
+    }
+    if (poDlg && t.closest('[data-dlg-close="po-dialog"]')) { poDlg.close(); return; }
+    if (outDlg && t.closest('[data-dlg-close="action-output"]')) { outDlg.close(); return; }
+  });
+  if (poDlg) poDlg.addEventListener('click', function(e){ if (e.target === poDlg) poDlg.close(); });
+  if (outDlg) outDlg.addEventListener('click', function(e){ if (e.target === outDlg) outDlg.close(); });
+
+  if (typeof fetch !== 'function' || typeof DOMParser !== 'function' || typeof FormData !== 'function') return;
+
+  // Signal to tests (and to our own sanity) that this document never did a
+  // full navigation. If we see a page reload, this sentinel will be reset.
+  window.__inboxBooted = (window.__inboxBooted || 0) + 1;
+
+  var swapMain = function(html){
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var fresh = doc.getElementById('inbox-main');
+    var cur = document.getElementById('inbox-main');
+    if (!fresh || !cur) return false;
+    var saved = window.scrollY;
+    cur.innerHTML = fresh.innerHTML;
+    // The server's 303-to-#anchor is only for noscript. In JS mode we strip
+    // the hash so back-button / reload don't relive the anchor jump.
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    window.scrollTo({ top: saved, left: 0, behavior: 'instant' });
+    return true;
+  };
+
+  var showOutput = function(text, ok){
+    if (!outDlg || !outPre) {
+      // No overlay shell in the DOM — fall back to alert so the user still
+      // sees the message rather than silently losing it.
+      alert(text);
+      return;
+    }
+    outPre.textContent = text;
+    if (outTitle) outTitle.textContent = ok ? 'Output' : 'Error';
+    if (typeof outDlg.showModal === 'function') outDlg.showModal();
+    else outDlg.setAttribute('open', '');
+  };
+
+  document.addEventListener('submit', function(e){
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if ((form.method || 'get').toLowerCase() !== 'post') return;
+    if (!form.closest('#inbox-main')) return;
+    e.preventDefault();
+
+    var body = new URLSearchParams();
+    var fd = new FormData(form);
+    fd.forEach(function(v, k){ body.append(k, typeof v === 'string' ? v : ''); });
+
+    var btns = form.querySelectorAll('button');
+    btns.forEach(function(b){ b.disabled = true; });
+
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cache-Control': 'no-cache' },
+      body: body.toString(),
+      credentials: 'same-origin',
+    })
+      .then(function(r){
+        var ct = r.headers.get('Content-Type') || '';
+        return r.text().then(function(text){ return { text: text, ct: ct, ok: r.ok }; });
+      })
+      .then(function(resp){
+        if (resp.ct.indexOf('text/html') >= 0) {
+          if (!swapMain(resp.text)) {
+            // Couldn't find #inbox-main in the response — safest is to full-
+            // reload so the user sees a coherent page.
+            location.reload();
+          }
+        } else {
+          showOutput(resp.text, resp.ok);
+          // The action likely mutated state (e.g. dispatched a review). Pull a
+          // fresh page so the row reflects the new status.
+          return fetch('/', { headers: { 'Cache-Control': 'no-cache' } })
+            .then(function(r){ return r.ok ? r.text() : null; })
+            .then(function(html){ if (html) swapMain(html); });
+        }
+      })
+      .catch(function(){
+        // Network error — re-enable buttons so the user can retry. No silent
+        // navigation fallback: that would defeat the whole point of intercepting.
+      })
+      .finally(function(){
+        btns.forEach(function(b){ b.disabled = false; });
+      });
+  });
+
   var POLL_MS = 5000;
   var isTyping = function(){
     var a = document.activeElement;
@@ -1606,15 +1709,11 @@ const clientScript = `(function(){
   var refresh = function(){
     if (isTyping()) return;
     if (document.hidden) return;
-    if (dlg && dlg.open) return;
+    if (poDlg && poDlg.open) return;
+    if (outDlg && outDlg.open) return;
     fetch('/', { headers: { 'Cache-Control': 'no-cache' } })
       .then(function(r){ if (!r.ok) throw new Error('bad status'); return r.text(); })
-      .then(function(html){
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        var fresh = doc.getElementById('inbox-main');
-        var cur = document.getElementById('inbox-main');
-        if (fresh && cur) cur.innerHTML = fresh.innerHTML;
-      })
+      .then(function(html){ swapMain(html); })
       .catch(function(){});
   };
   setInterval(refresh, POLL_MS);
@@ -1669,9 +1768,16 @@ ${body}
 <dialog id="po-dialog" class="po-dialog" aria-labelledby="po-dialog-title">
   <div class="po-dialog__head">
     <h2 id="po-dialog-title" class="po-dialog__title">About Po</h2>
-    <button type="button" class="po-dialog__close" aria-label="Close">×</button>
+    <button type="button" class="po-dialog__close" data-dlg-close="po-dialog" aria-label="Close">×</button>
   </div>
   <div class="po-dialog__body">${getPoBioHtml()}</div>
+</dialog>
+<dialog id="action-output" class="po-dialog action-output" aria-labelledby="action-output-title">
+  <div class="po-dialog__head">
+    <h2 id="action-output-title" class="po-dialog__title">Output</h2>
+    <button type="button" class="po-dialog__close" data-dlg-close="action-output" aria-label="Close">×</button>
+  </div>
+  <pre id="action-output-body" class="action-output__body"></pre>
 </dialog>
 <script>${clientScript}</script>
 </body>
