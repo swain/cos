@@ -1,6 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import chalk from "chalk";
 import { getDb } from "../db.js";
+import { COS_DIR } from "../util.js";
 import {
   collectDashboard,
   getCronTickStatus,
@@ -43,6 +46,78 @@ import { invalidateUpcomingCache } from "../inbox/upcoming.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.COS_INBOX_PORT) || 4411;
+const PO_MD_PATH = join(COS_DIR, "po.md");
+
+// Inline editorial monogram — accent square with a reversed-out italic serif
+// "P", echoing the masthead typography. `currentColor` = --accent, so a single
+// CSS rule on .po-mark drives the whole mark and it adapts to dark mode for
+// free.
+const PO_MARK_SVG = `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <rect class="po-mark__bg" x="0" y="0" width="32" height="32" rx="3" ry="3"/>
+  <text class="po-mark__glyph" x="16" y="23" text-anchor="middle" font-family="'Iowan Old Style','Palatino Linotype',Palatino,Georgia,ui-serif,serif" font-size="23" font-style="italic" font-weight="500">P</text>
+</svg>`;
+
+// Tiny markdown → HTML: handles what po.md actually uses (h1/h2, paragraphs,
+// `-` bullets, blockquotes, **bold**, *italic*, `code`). No link syntax — bio
+// has none. Escape first so nothing inside the file can break out.
+const renderBioMarkdown = (md: string): string => {
+  const inline = (s: string): string =>
+    escapeHtml(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(/(^|[\s(])_([^_]+)_(?=[\s.,!?)]|$)/g, "$1<em>$2</em>");
+  const lines = md.split(/\r?\n/);
+  const out: string[] = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      out.push("</ul>");
+      inList = false;
+    }
+  };
+  for (const line of lines) {
+    const h = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (h) {
+      closeList();
+      const level = h[1].length;
+      out.push(`<h${level}>${inline(h[2])}</h${level}>`);
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      closeList();
+      out.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    if (/^-\s+/.test(line)) {
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inline(line.replace(/^-\s+/, ""))}</li>`);
+      continue;
+    }
+    if (line.trim() === "") {
+      closeList();
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join("\n");
+};
+
+let poBioHtmlCache: string | null = null;
+const getPoBioHtml = (): string => {
+  if (poBioHtmlCache !== null) return poBioHtmlCache;
+  try {
+    poBioHtmlCache = renderBioMarkdown(readFileSync(PO_MD_PATH, "utf8"));
+  } catch {
+    poBioHtmlCache = `<p>Po's bio is missing at <code>${escapeHtml(PO_MD_PATH)}</code>.</p>`;
+  }
+  return poBioHtmlCache;
+};
 
 const escapeHtml = (s: string): string =>
   s
@@ -174,13 +249,151 @@ body {
 /* Masthead — serif nameplate, thin hairline rule beneath, refresh meta in mono. */
 .masthead {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--rule-strong);
   margin-bottom: 32px;
 }
+.masthead__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.po-mark {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 0;
+  color: var(--accent);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.po-mark:hover { opacity: 0.8; }
+.po-mark:active { transform: scale(0.96); }
+.po-mark:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.po-mark svg { display: block; width: 100%; height: 100%; }
+.po-mark svg .po-mark__bg { fill: currentColor; }
+.po-mark svg .po-mark__glyph { fill: var(--paper); }
+
+/* Po bio dialog — unreset a <dialog>, then paint it in the editorial palette. */
+.po-dialog {
+  max-width: 640px;
+  width: calc(100vw - 32px);
+  max-height: 85vh;
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--fg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-family: var(--font-body);
+}
+.po-dialog::backdrop {
+  background: rgba(20, 18, 12, 0.45);
+  backdrop-filter: blur(2px);
+}
+.po-dialog__head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  z-index: 1;
+}
+.po-dialog__title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+.po-dialog__close {
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  color: var(--muted);
+  cursor: pointer;
+}
+.po-dialog__close:hover { background: var(--rule); color: var(--fg-soft); }
+.po-dialog__body {
+  padding: 28px 36px 40px;
+  overflow-y: auto;
+  max-height: calc(85vh - 52px);
+  color: var(--fg-soft);
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+.po-dialog__body h1 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0 0 24px;
+}
+.po-dialog__body h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 20px;
+  line-height: 1.2;
+  color: var(--fg);
+  margin: 28px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.po-dialog__body h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--fg);
+  margin: 20px 0 8px;
+}
+.po-dialog__body p { margin: 0 0 12px; }
+.po-dialog__body ul { margin: 0 0 12px; padding-left: 20px; }
+.po-dialog__body li { margin-bottom: 6px; }
+.po-dialog__body strong { color: var(--fg); }
+.po-dialog__body em { font-style: italic; }
+.po-dialog__body code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  background: var(--rule);
+  border-radius: 3px;
+  color: var(--fg);
+}
+.po-dialog__body blockquote {
+  margin: 16px 0;
+  padding: 4px 18px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
 .masthead h1 {
   font-family: var(--font-display);
   font-weight: 400;
@@ -1034,6 +1247,27 @@ const renderTickBanner = (tick: CronTickStatus | null): string => {
 };
 
 const clientScript = `(function(){
+  var dlg = document.getElementById('po-dialog');
+  // Use document-level delegation because the masthead lives inside #inbox-main
+  // and gets innerHTML-replaced every 5s by the refresh loop below — any
+  // listener bound to the button directly would evaporate on first poll.
+  if (dlg) {
+    document.addEventListener('click', function(e){
+      var t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest('#po-mark-btn')) {
+        e.preventDefault();
+        if (typeof dlg.showModal === 'function') dlg.showModal();
+        else dlg.setAttribute('open', '');
+        return;
+      }
+      if (t.closest('.po-dialog__close')) { dlg.close(); return; }
+    });
+    dlg.addEventListener('click', function(e){
+      if (e.target === dlg) dlg.close();
+    });
+  }
+
   if (typeof fetch !== 'function' || typeof DOMParser !== 'function') return;
   var POLL_MS = 5000;
   var isTyping = function(){
@@ -1043,6 +1277,7 @@ const clientScript = `(function(){
   var refresh = function(){
     if (isTyping()) return;
     if (document.hidden) return;
+    if (dlg && dlg.open) return;
     fetch('/', { headers: { 'Cache-Control': 'no-cache' } })
       .then(function(r){ if (!r.ok) throw new Error('bad status'); return r.text(); })
       .then(function(html){
@@ -1092,12 +1327,22 @@ const renderPage = (
 <body>
 <div id="inbox-main">
 <header class="masthead">
-  <h1>Inbox${total ? `<span class="count">${total}</span>` : ""}</h1>
+  <div class="masthead__brand">
+    <button type="button" id="po-mark-btn" class="po-mark" aria-label="About Po" aria-haspopup="dialog" aria-controls="po-dialog">${PO_MARK_SVG}</button>
+    <h1>Inbox${total ? `<span class="count">${total}</span>` : ""}</h1>
+  </div>
   <div class="meta">refreshed ${now} · polls every 5s</div>
 </header>
 ${renderTickBanner(tick)}
 ${body}
 </div>
+<dialog id="po-dialog" class="po-dialog" aria-labelledby="po-dialog-title">
+  <div class="po-dialog__head">
+    <h2 id="po-dialog-title" class="po-dialog__title">About Po</h2>
+    <button type="button" class="po-dialog__close" aria-label="Close">×</button>
+  </div>
+  <div class="po-dialog__body">${getPoBioHtml()}</div>
+</dialog>
 <script>${clientScript}</script>
 </body>
 </html>`;
