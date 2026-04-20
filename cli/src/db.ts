@@ -670,6 +670,16 @@ export type CronTick = {
   rc: number | null;
 };
 
+export type ZombieTick = {
+  id: string;
+  started_at: string;
+  age_minutes: number;
+};
+
+// Sentinel rc assigned to cron_ticks rows that were reaped by the zombie
+// sweep (previous tick process died before writing ended_at).
+export const ZOMBIE_SWEEP_RC = -1;
+
 export const cronTicks = {
   start(id: string): void {
     getDb().prepare(`INSERT INTO cron_ticks (id) VALUES (?)`).run(id);
@@ -680,6 +690,34 @@ export const cronTicks = {
         `UPDATE cron_ticks SET ended_at = datetime('now'), rc = @rc WHERE id = @id`,
       )
       .run({ id, rc });
+  },
+  // Reap any cron_ticks rows that started > 5 minutes ago and never got
+  // an ended_at. The tick runner is single-instance (launchd throttling),
+  // so any unended row older than that window is definitionally a zombie
+  // from a process that died silently. Returns the reaped rows (with age
+  // in minutes) so callers can log them for pattern detection.
+  sweepZombies(): ZombieTick[] {
+    const db = getDb();
+    return db.transaction((): ZombieTick[] => {
+      const rows = db
+        .prepare(
+          `SELECT id, started_at,
+             CAST((julianday('now') - julianday(started_at)) * 24 * 60 AS INTEGER) AS age_minutes
+           FROM cron_ticks
+           WHERE ended_at IS NULL
+             AND started_at < datetime('now', '-5 minutes')`,
+        )
+        .all() as ZombieTick[];
+      if (rows.length > 0) {
+        db.prepare(
+          `UPDATE cron_ticks
+              SET ended_at = datetime('now'), rc = @rc
+            WHERE ended_at IS NULL
+              AND started_at < datetime('now', '-5 minutes')`,
+        ).run({ rc: ZOMBIE_SWEEP_RC });
+      }
+      return rows;
+    })();
   },
   current(): CronTick | null {
     const r = getDb()
