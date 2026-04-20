@@ -7,8 +7,12 @@ import { ulid } from "ulid";
 const tmp = mkdtempSync(join(tmpdir(), "cos-workitems-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
-import { buildModeAddendum, cmdWorkerDone } from "./workitems.js";
-import { workItems, sessions, getDb } from "../db.js";
+import {
+  buildModeAddendum,
+  checkPendingPlanBlocksDispatch,
+  cmdWorkerDone,
+} from "./workitems.js";
+import { workItems, sessions, plans, getDb } from "../db.js";
 
 afterAll(() => {
   getDb().close();
@@ -18,7 +22,7 @@ afterAll(() => {
 beforeEach(() => {
   const db = getDb();
   db.exec(
-    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log;",
+    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log; DELETE FROM plans;",
   );
 });
 
@@ -155,5 +159,67 @@ describe("buildModeAddendum", () => {
     const addendum = buildModeAddendum(wi, "sess-x");
     expect(addendum).toContain("pull/2");
     expect(addendum).not.toContain("pull/1 ");
+  });
+});
+
+describe("checkPendingPlanBlocksDispatch", () => {
+  it("returns null when the WI has no plans", () => {
+    const wiId = insertWi({ status: "queued" });
+    expect(checkPendingPlanBlocksDispatch(wiId)).toBeNull();
+  });
+
+  it("blocks dispatch when the latest plan is awaiting-review", () => {
+    const wiId = insertWi({ status: "queued" });
+    plans.insert({
+      id: "plan-pending",
+      work_item_id: wiId,
+      path: "/tmp/plan.md",
+    });
+    const msg = checkPendingPlanBlocksDispatch(wiId);
+    expect(msg).not.toBeNull();
+    expect(msg).toContain("awaiting review");
+    expect(msg).toContain("plan-pending");
+  });
+
+  it("blocks dispatch when the latest plan is feedback (re-plan in flight)", () => {
+    const wiId = insertWi({ status: "queued" });
+    plans.insert({
+      id: "plan-fb",
+      work_item_id: wiId,
+      path: "/tmp/plan.md",
+    });
+    plans.update("plan-fb", {
+      status: "feedback",
+      feedback_body: "please make it shorter",
+    });
+    const msg = checkPendingPlanBlocksDispatch(wiId);
+    expect(msg).not.toBeNull();
+    expect(msg).toContain("got feedback");
+  });
+
+  it("allows dispatch when the latest plan is approved (execute path)", () => {
+    const wiId = insertWi({ status: "queued" });
+    plans.insert({
+      id: "plan-ok",
+      work_item_id: wiId,
+      path: "/tmp/plan.md",
+    });
+    plans.update("plan-ok", { status: "approved" });
+    expect(checkPendingPlanBlocksDispatch(wiId)).toBeNull();
+  });
+
+  it("allows dispatch when an older plan is feedback but a newer plan is approved", () => {
+    const wiId = insertWi({ status: "queued" });
+    // `datetime('now')` in SQLite has second-resolution, so tight-loop inserts
+    // can tie on created_at and make ORDER BY non-deterministic. Stamp the two
+    // rows with explicit, distinct created_at values instead.
+    const db = getDb();
+    db.prepare(
+      "INSERT INTO plans (id, work_item_id, path, status, created_at) VALUES (?, ?, '/tmp/old.md', 'feedback', '2026-01-01 00:00:00')",
+    ).run("plan-old", wiId);
+    db.prepare(
+      "INSERT INTO plans (id, work_item_id, path, status, created_at) VALUES (?, ?, '/tmp/new.md', 'approved', '2026-01-02 00:00:00')",
+    ).run("plan-new", wiId);
+    expect(checkPendingPlanBlocksDispatch(wiId)).toBeNull();
   });
 });

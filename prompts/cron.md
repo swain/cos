@@ -118,6 +118,8 @@ For each signal in the snapshot with `status=new`:
 
 List queued items: `cos fleet --format json | jq '.queued'`. For each one where `priority <= config.auto_dispatch_max_priority` and `repos` is set and `acceptance_criteria` is non-empty, run `cos dispatch <wi-id>`. No daily cap — dispatch every eligible item in priority order.
 
+Skip any queued work item whose latest plan row is `awaiting-review` or `feedback` — the user is mid-review, or a re-plan child is regenerating, and spawning a worker would just no-op and land the WI in `blocked`. `cos dispatch` also enforces this with a yellow `skipped:` message + exit 3, so a blind loop is safe but wasteful. Check plan status with `cos plan-status <plan-id>` if needed.
+
 If `dispatch_paused=true` in config.json, skip this step silently.
 
 ### 4. PUSH notifications
