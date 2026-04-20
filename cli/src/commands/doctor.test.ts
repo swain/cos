@@ -271,6 +271,54 @@ describe("doctor: stranded-work-item invariant", () => {
     expect(wi.status).toBe("in-progress");
   });
 
+  it("stale-heartbeat: does not flip terminal sessions back to stale (wi-58)", () => {
+    // Regression: a manually-reaped session (status='ended', stale heartbeat)
+    // was getting re-flipped to 'stale' on each doctor run, polluting the
+    // fleet stale-count. Also covers completed/failed/killed/stale/archived
+    // and the out-of-enum 'ended' value that appears in prod.
+    const staleHb = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const terminalStatuses = [
+      "ended",
+      "completed",
+      "failed",
+      "killed",
+      "stale",
+      "archived",
+    ];
+    const sessionIds: Record<string, string> = {};
+    for (const status of terminalStatuses) {
+      sessionIds[status] = insertSession({
+        status,
+        last_heartbeat: staleHb,
+        ended_at: new Date().toISOString(),
+      });
+    }
+
+    const report = runDoctor({ autoFix: true, dryRun: false, format: "json" });
+
+    const finding = report.findings.find(
+      (f) => f.invariant === "stale-heartbeat",
+    )!;
+    expect(finding.ok).toBe(true);
+    expect(finding.entries).toHaveLength(0);
+    expect(finding.fixed).toHaveLength(0);
+
+    for (const status of terminalStatuses) {
+      const row = sessions.get(sessionIds[status])!;
+      expect(row.status, `status=${status} must not be flipped`).toBe(status);
+    }
+  });
+
+  it("stale-heartbeat: still flips genuinely stale live sessions", () => {
+    const sessId = insertSession({
+      status: "running",
+      last_heartbeat: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    });
+    runDoctor({ autoFix: true, dryRun: false, format: "json" });
+    const row = sessions.get(sessId)!;
+    expect(row.status).toBe("stale");
+  });
+
   it("fleet-wide crash scenario: 17 stranded WIs all get reset", () => {
     const wiIds: string[] = [];
     for (let i = 0; i < 17; i++) {

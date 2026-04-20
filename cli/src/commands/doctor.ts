@@ -32,6 +32,17 @@ const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
 const DEFAULT_SESSION_ARCHIVE_DAYS = 7;
 
+// Doctor mutations that transition a session to a terminal state may only
+// touch rows whose status is in this set. Without this guard, an already-
+// ended/completed/failed/killed session with a stale heartbeat keeps getting
+// flipped back to 'stale' each run (observed 2026-04-20 on a manually-reaped
+// session that kept reverting and polluting the fleet stale-count).
+const LIVE_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  "starting",
+  "running",
+  "idle",
+]);
+
 const COS_REPO_PATH = join(HOME, "Repos/cos");
 const COS_SHAREABLE_DIRS = ["prompts", "cli/src", "bin", "launchd"];
 
@@ -178,6 +189,7 @@ const checkInvariant1Zombie = (opts: DoctorOptions): DoctorFinding => {
   if (!active.length) return f;
   const windows = listTmuxWindows();
   for (const s of active) {
+    if (!LIVE_SESSION_STATUSES.has(s.status)) continue;
     const expected = expectedTmuxWindow(s);
     if (!expected) continue;
     const gone = windows === null ? true : !windows.includes(expected);
@@ -219,6 +231,10 @@ const checkInvariant2StaleHeartbeat = (opts: DoctorOptions): DoctorFinding => {
     ...sessionsApi.list({ status: "starting" }),
   ];
   for (const s of candidates) {
+    // Defense-in-depth: the .list() filter above already scopes to live
+    // statuses, but keep this check so a future edit that widens the query
+    // can't regress on wi-58.
+    if (!LIVE_SESSION_STATUSES.has(s.status)) continue;
     const age = minutesSince(s.last_heartbeat);
     if (age <= threshold) continue;
     f.ok = false;
@@ -274,7 +290,7 @@ const checkInvariant3SilentWorker = (opts: DoctorOptions): DoctorFinding => {
     const s = sessionsApi.get(sessionId);
     // Only flag sessions that are still supposedly alive — if the session is
     // already completed/failed/stale/killed we don't re-escalate.
-    if (!s || !["starting", "running", "idle"].includes(s.status)) continue;
+    if (!s || !LIVE_SESSION_STATUSES.has(s.status)) continue;
     const heartbeatAgeMin = minutesSince(s.last_heartbeat);
     if (heartbeatAgeMin < SILENT_WORKER_MINUTES) continue;
     f.ok = false;
@@ -716,7 +732,6 @@ const checkInvariant8GitSyncDrift = (opts: DoctorOptions): DoctorFinding => {
 // the dead session and dispatch refuses to re-pick it. 2026-04-18: 17 WIs sat
 // stranded for ~10h after a fleet-wide crash. Runs after invariants 1–3 so
 // sessions just marked stale/failed get picked up in the same tick.
-const ACTIVE_SESSION_STATUSES = new Set(["starting", "running", "idle"]);
 export const checkInvariant9StrandedWorkItem = (
   opts: DoctorOptions,
 ): DoctorFinding => {
@@ -726,7 +741,7 @@ export const checkInvariant9StrandedWorkItem = (
   for (const wi of inProgress) {
     const session = wi.session_id ? sessionsApi.get(wi.session_id) : null;
     const sessionStatus = session?.status ?? null;
-    if (session && ACTIVE_SESSION_STATUSES.has(sessionStatus!)) continue;
+    if (session && LIVE_SESSION_STATUSES.has(sessionStatus!)) continue;
     const reason = session
       ? `linked session ${session.id} is ${sessionStatus}, not active`
       : wi.session_id
