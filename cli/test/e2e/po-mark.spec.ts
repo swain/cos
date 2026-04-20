@@ -25,7 +25,10 @@ test("Po icon is visible in header and opens the bio dialog", async ({
 
   await mark.click();
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator("h1")).toHaveText(/Po/);
+  // Assert on the dialog chrome (always rendered) rather than bio content —
+  // CI doesn't ship ~/.claude/cos/po.md, so the body falls back to a stub.
+  await expect(dialog.locator(".po-dialog__title")).toHaveText("About Po");
+  await expect(dialog.locator(".po-dialog__body")).not.toBeEmpty();
 
   await dialog.locator(".po-dialog__close").click();
   await expect(dialog).not.toBeVisible();
