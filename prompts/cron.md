@@ -122,7 +122,15 @@ If `dispatch_paused=true` in config.json, skip this step silently.
 
 ### 4. PUSH notifications
 
-Read `cos notify-unpushed`. For each urgent or normal notification, call the `PushNotification` tool with the notification's subject+body. Then `cos notify-mark-pushed <id>`. Digest urgency is deferred.
+Read `cos notify-unpushed`. For each urgent or normal notification, run:
+
+```bash
+cos notify-push <id>
+```
+
+The CLI invokes `osascript display notification` directly — urgent notifications get a loud sound, normal ones are silent — and marks the row `pushed_at` on success. Digest urgency is deferred.
+
+**Do NOT call the `PushNotification` tool.** The Claude Code harness suppresses it whenever the user has typed within the last 60s, which during work hours is effectively always. `cos notify-push` bypasses the harness entirely and surfaces a native macOS banner regardless of focus or activity. The CLI also owns escaping, so you don't have to worry about quote-quoting notification bodies into AppleScript.
 
 ### 5. CHECK stale sessions
 

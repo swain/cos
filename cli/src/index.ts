@@ -35,6 +35,7 @@ import {
   cmdNotify,
   cmdNotifyListUnpushed,
   cmdNotifyMarkPushed,
+  cmdNotifyPush,
 } from "./commands/notify.js";
 import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
 import { cmdDoctor } from "./commands/doctor.js";
@@ -387,6 +388,14 @@ program
   .command("notify-mark-pushed <id>")
   .description("Mark a notification as pushed")
   .action((id) => cmdNotifyMarkPushed(id));
+
+program
+  .command("notify-push <id>")
+  .description(
+    "Push a notification via macOS osascript (marks pushed on success)",
+  )
+  .option("--dry-run", "print the osascript command without running it", false)
+  .action((id, opts) => cmdNotifyPush(id, { dryRun: !!opts.dryRun }));
 
 program
   .command("generate-ai-native")

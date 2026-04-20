@@ -525,6 +525,12 @@ export const notifications = {
       )
       .run({ ...n, related_ids: JSON.stringify(n.related_ids) });
   },
+  get(id: string): Notification | null {
+    const r = getDb()
+      .prepare(`SELECT * FROM notifications WHERE id = ?`)
+      .get(id) as any;
+    return r ? rowToNotification(r) : null;
+  },
   listUnpushed(): Notification[] {
     return (
       getDb()
