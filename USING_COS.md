@@ -345,6 +345,24 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.smolster.cos.cron.pl
 launchctl kickstart gui/$(id -u)/com.smolster.cos.cron
 ```
 
+### Why does the cron stall when my Mac sleeps?
+
+Short answer: it used to, but the plist now has `WakeSystem=true` so it doesn't anymore.
+
+Long answer: by default, macOS does **not** wake a sleeping Mac to fire a `StartInterval` launchd job. The job is allowed to drift until the system wakes for another reason, and then launchd coalesces the missed fires into a **single** catch-up run. Practical symptom: close the laptop at midnight, open it at 09:00, and only one `cos tick` ran during those nine hours. For a 15-minute cron that's the difference between ~36 ticks and 1. Signals go stale, PRs sit unreviewed, and I end up hand-kicking the job with `launchctl kickstart`.
+
+The fix is a one-line plist key — `<key>WakeSystem</key><true/>` — which tells launchd to wake the system briefly when it's time to fire. The Mac wakes, `cos-tick` runs (usually under a second of active work + whatever the tick itself does), and the system goes back to sleep on its own. Energy cost is negligible; it's exactly the mechanism Apple designed for maintenance jobs.
+
+If you ever see ticks stalling while asleep again, check the live plist:
+
+```bash
+plutil -p ~/Library/LaunchAgents/com.$(whoami).cos.cron.plist | grep -i wake
+```
+
+Should print `"WakeSystem" => 1`. If it doesn't, re-run `./install.sh` from the repo — it re-renders from the template and reloads the agent.
+
+The `StartInterval=900` cadence is unchanged. A future tweak worth considering (not required, not done) is switching to `StartCalendarInterval` so fires are anchored to wall-clock minutes instead of interval-from-last-fire — more predictable post-wake, but not necessary for the stall fix.
+
 ### A worker is stuck
 
 ```bash
