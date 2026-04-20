@@ -71,6 +71,35 @@ export const cmdTick = async (opts: { dryRun?: boolean } = {}) => {
   const startedAt = nowIso();
   console.error(chalk.gray(`[tick ${tickId}] start ${startedAt}`));
 
+  // Reap zombie rows from prior ticks that died before writing ended_at.
+  // Without this the fleet display (cronTicks.current()) keeps picking
+  // the oldest unended row as "in progress" forever. Safe to run in
+  // --dry-run: it only mutates state that is already broken.
+  try {
+    const zombies = cronTicks.sweepZombies();
+    for (const z of zombies) {
+      cosLog.insert({
+        id: `zsweep-${ulid()}`,
+        signals_triaged: 0,
+        ideas_promoted: 0,
+        items_dispatched: 0,
+        notifications_sent: 0,
+        summary: `[cron-zombie-swept] zombie=${z.id} age_minutes=${z.age_minutes}`,
+      });
+    }
+    if (zombies.length > 0) {
+      console.error(
+        chalk.yellow(
+          `[tick] swept ${zombies.length} zombie tick(s): ${zombies
+            .map((z) => `${z.id} (${z.age_minutes}m)`)
+            .join(", ")}`,
+        ),
+      );
+    }
+  } catch (e: any) {
+    console.error(chalk.yellow(`[tick] zombie sweep error: ${e.message}`));
+  }
+
   // Mark the tick as in-progress in the DB before any work runs. This is
   // what `cos fleet` and the inbox use to show "Cron tick in progress"
   // instead of just the last completed timestamp. Skip the marker in

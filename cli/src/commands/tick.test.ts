@@ -8,7 +8,7 @@ const tmp = mkdtempSync(join(tmpdir(), "cos-tick-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
 import { cmdSessionMarkStale } from "./tick.js";
-import { sessions, getDb } from "../db.js";
+import { sessions, cronTicks, getDb, ZOMBIE_SWEEP_RC } from "../db.js";
 
 afterAll(() => {
   getDb().close();
@@ -68,5 +68,77 @@ describe("cmdSessionMarkStale", () => {
     }) as any);
     expect(() => cmdSessionMarkStale("sess-does-not-exist")).toThrow(/exit 2/);
     exit.mockRestore();
+  });
+});
+
+describe("cronTicks.sweepZombies", () => {
+  beforeEach(() => {
+    getDb().exec("DELETE FROM cron_ticks;");
+  });
+
+  const insertTick = (opts: {
+    id?: string;
+    startedMinutesAgo: number;
+    ended?: boolean;
+    rc?: number | null;
+  }): string => {
+    const id = opts.id ?? `tick-${ulid()}`;
+    getDb()
+      .prepare(
+        `INSERT INTO cron_ticks (id, started_at, ended_at, rc)
+         VALUES (@id, datetime('now', @startedOffset), @ended_at, @rc)`,
+      )
+      .run({
+        id,
+        startedOffset: `-${opts.startedMinutesAgo} minutes`,
+        ended_at: opts.ended ? new Date().toISOString() : null,
+        rc: opts.rc ?? null,
+      });
+    return id;
+  };
+
+  it("reaps unended rows older than 5 minutes with rc=-1", () => {
+    const zombieId = insertTick({ startedMinutesAgo: 10 });
+    const result = cronTicks.sweepZombies();
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(zombieId);
+    expect(result[0].age_minutes).toBeGreaterThanOrEqual(10);
+
+    const reaped = getDb()
+      .prepare(`SELECT ended_at, rc FROM cron_ticks WHERE id = ?`)
+      .get(zombieId) as any;
+    expect(reaped.ended_at).not.toBeNull();
+    expect(reaped.rc).toBe(ZOMBIE_SWEEP_RC);
+  });
+
+  it("leaves fresh unended rows alone (the current tick)", () => {
+    const currentId = insertTick({ startedMinutesAgo: 1 });
+    const result = cronTicks.sweepZombies();
+    expect(result).toHaveLength(0);
+
+    const row = getDb()
+      .prepare(`SELECT ended_at, rc FROM cron_ticks WHERE id = ?`)
+      .get(currentId) as any;
+    expect(row.ended_at).toBeNull();
+    expect(row.rc).toBeNull();
+  });
+
+  it("leaves already-ended rows alone", () => {
+    const completedId = insertTick({
+      startedMinutesAgo: 30,
+      ended: true,
+      rc: 0,
+    });
+    const result = cronTicks.sweepZombies();
+    expect(result).toHaveLength(0);
+
+    const row = getDb()
+      .prepare(`SELECT rc FROM cron_ticks WHERE id = ?`)
+      .get(completedId) as any;
+    expect(row.rc).toBe(0);
+  });
+
+  it("returns empty when no zombies exist", () => {
+    expect(cronTicks.sweepZombies()).toEqual([]);
   });
 });
