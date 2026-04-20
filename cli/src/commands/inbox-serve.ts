@@ -52,19 +52,11 @@ import {
   findUpcomingMeetingById,
   invalidateUpcomingCache,
 } from "../inbox/upcoming.js";
+import { PO_MARK_FAVICON_SVG, PO_MARK_SVG } from "../lib/po-mark.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.COS_INBOX_PORT) || 4411;
 const PO_MD_PATH = join(COS_DIR, "po.md");
-
-// Inline editorial monogram — accent square with a reversed-out italic serif
-// "P", echoing the masthead typography. `currentColor` = --accent, so a single
-// CSS rule on .po-mark drives the whole mark and it adapts to dark mode for
-// free.
-const PO_MARK_SVG = `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-  <rect class="po-mark__bg" x="0" y="0" width="32" height="32" rx="3" ry="3"/>
-  <text class="po-mark__glyph" x="16" y="23" text-anchor="middle" font-family="'Iowan Old Style','Palatino Linotype',Palatino,Georgia,ui-serif,serif" font-size="23" font-style="italic" font-weight="500">P</text>
-</svg>`;
 
 // Tiny markdown → HTML: handles what po.md actually uses (h1/h2, paragraphs,
 // `-` bullets, blockquotes, **bold**, *italic*, `code`). No link syntax — bio
@@ -1658,6 +1650,7 @@ const renderPage = (
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <noscript><meta http-equiv="refresh" content="15"></noscript>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>Inbox${total ? ` (${total})` : ""}</title>
 <style>${styles}</style>
 </head>
@@ -1764,6 +1757,7 @@ const renderPrepPage = (eventId: string): { code: number; html: string } => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${escapeHtml(meeting.summary)} — prep</title>
 <style>${styles}
 /* Prep-view overrides: give the prose a readable measure and editorial
@@ -1866,6 +1860,14 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "GET" && path === "/healthz") {
       sendText(res, 200, "ok");
+      return;
+    }
+    if (method === "GET" && path === "/favicon.svg") {
+      res.writeHead(200, {
+        "Content-Type": "image/svg+xml",
+        "Cache-Control": "public, max-age=3600",
+      });
+      res.end(PO_MARK_FAVICON_SVG);
       return;
     }
     const prepGet =
