@@ -128,6 +128,21 @@ sed \
   "$REPO_ROOT/launchd/com.cos.cron.plist.template" > "$PLIST_OUT"
 plutil -lint "$PLIST_OUT" >/dev/null && echo "    $PLIST_OUT (valid plist)"
 
+# ----- Reload launchd agent if already loaded -----
+# Re-render above is inert until launchd picks up the new plist. If the agent
+# is already loaded, bootout + bootstrap + kickstart so plist changes (e.g.
+# WakeSystem) take effect in the same `install.sh` run. If not loaded, fall
+# through to the "Next steps" hint below.
+UID_N="$(id -u)"
+if launchctl print "gui/$UID_N/$LABEL" >/dev/null 2>&1; then
+  echo
+  echo "==> Reloading launchd agent ${LABEL} to pick up plist changes…"
+  launchctl bootout "gui/$UID_N/$LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$UID_N" "$PLIST_OUT"
+  launchctl kickstart "gui/$UID_N/$LABEL"
+  echo "    reloaded"
+fi
+
 echo
 echo "✅ COS installed."
 echo
