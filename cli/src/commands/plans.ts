@@ -225,15 +225,43 @@ export const cmdPlanSupersede = (planId: string, note?: string) => {
   console.log(chalk.gray("superseded"), planId);
 };
 
-const runPlannotatorAnnotate = (path: string): Promise<number> =>
+// Runs `plannotator annotate <path>`. We pipe stdout so we can capture the
+// feedback body the tool prints on submit (its stderr carries progress + the
+// server URL, so we inherit that). On "Send feedback" with a non-empty body,
+// plannotator writes the feedback text to stdout; with an empty body it writes
+// "No feedback provided." — we use that sentinel to fall through to the
+// approve/skip prompt.
+const PLANNOTATOR_EMPTY_FEEDBACK = "No feedback provided.";
+
+// Decide how to act on plannotator's post-exit stdout. "Send feedback" with a
+// body → resubmit directly; empty / sentinel → ask the user approve/skip so
+// they can still approve without retyping anything.
+export const decidePlanReviewAction = (
+  stdout: string,
+): { kind: "resubmit"; feedback: string } | { kind: "prompt" } => {
+  const feedback = stdout.trim();
+  if (!feedback || feedback === PLANNOTATOR_EMPTY_FEEDBACK) {
+    return { kind: "prompt" };
+  }
+  return { kind: "resubmit", feedback };
+};
+
+const runPlannotatorAnnotate = (
+  path: string,
+): Promise<{ code: number; stdout: string }> =>
   new Promise((resolve) => {
+    const chunks: Buffer[] = [];
     const child = spawn("plannotator", ["annotate", path], {
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "inherit"],
     });
-    child.on("close", (code) => resolve(code ?? 0));
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.on("close", (code) => {
+      const stdout = Buffer.concat(chunks).toString("utf8");
+      resolve({ code: code ?? 0, stdout });
+    });
     child.on("error", (err) => {
       console.error(chalk.red(`plannotator failed: ${err.message}`));
-      resolve(1);
+      resolve({ code: 1, stdout: "" });
     });
   });
 
@@ -250,9 +278,11 @@ const parseReviewChoice = (raw: string): ReviewChoice | null => {
 };
 
 // Interactive review flow for a single plan: open plannotator on the plan
-// markdown, then prompt for approve/feedback/skip. Mirrors cmdReviewPr —
-// plannotator drives the highlight/comment UI, and this wrapper persists
-// the decision back to the plans row.
+// markdown, then persist the user's decision. Mirrors cmdReviewPr. When the
+// user clicks "Send feedback" in plannotator with a non-empty body, we
+// auto-resubmit with that body — no second terminal prompt. If the body is
+// empty (or plannotator exited without a usable payload), fall back to the
+// interactive approve/feedback/skip prompt so the user can still approve.
 export const cmdPlanReview = async (planId: string): Promise<void> => {
   const p = plans.get(planId);
   if (!p) {
@@ -266,11 +296,17 @@ export const cmdPlanReview = async (planId: string): Promise<void> => {
     process.exit(3);
   }
   console.log(chalk.cyan(`\n→ Reviewing plan: ${p.path}`));
-  const code = await runPlannotatorAnnotate(p.path);
+  const { code, stdout } = await runPlannotatorAnnotate(p.path);
   if (code !== 0) {
     console.log(
       chalk.yellow(`  plannotator exited ${code} — skipping decision prompt`),
     );
+    return;
+  }
+  const decision = decidePlanReviewAction(stdout);
+  if (decision.kind === "resubmit") {
+    console.log(chalk.yellow("  received feedback from plannotator"));
+    cmdPlanResubmit(planId, { feedback: decision.feedback });
     return;
   }
   const rl = readline.createInterface({ input, output });

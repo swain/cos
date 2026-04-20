@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { execSync, spawnSync } from "node:child_process";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
-import { workItems, sessions, kv } from "../db.js";
+import { workItems, sessions, kv, plans } from "../db.js";
 import { buildPlanApprovedAddendum } from "./plans.js";
 import type { WorkItem, SessionKind } from "../types.js";
 import {
@@ -309,6 +309,24 @@ const buildFixCommentsAddendum = (wi: WorkItem, sessionId: string): string => {
   ].join("\n");
 };
 
+// Returns a human-readable skip reason if the work item has a plan row that
+// blocks dispatch. Awaiting-review means the user still owes a decision;
+// feedback means a re-plan child work item is in flight. Either way, spawning
+// a worker just lands the WI in `blocked` after a no-op. Approved / superseded
+// / no plans = no block.
+export const checkPendingPlanBlocksDispatch = (
+  workItemId: string,
+): string | null => {
+  const latestPlan = plans.list({ workItemId })[0];
+  if (latestPlan?.status === "awaiting-review") {
+    return `skipped: plan ${latestPlan.id} is awaiting review — approve or send feedback in the inbox first`;
+  }
+  if (latestPlan?.status === "feedback") {
+    return `skipped: plan ${latestPlan.id} got feedback — a re-plan child work item is regenerating; parent waits`;
+  }
+  return null;
+};
+
 export const cmdDispatch = (
   workItemRef: string,
   opts: { force?: boolean } = {},
@@ -386,6 +404,11 @@ export const cmdDispatch = (
       console.error(
         chalk.yellow(`work item already has active session: ${existing[0].id}`),
       );
+      process.exit(3);
+    }
+    const planBlock = checkPendingPlanBlocksDispatch(workItemId);
+    if (planBlock) {
+      console.error(chalk.yellow(planBlock));
       process.exit(3);
     }
   }
