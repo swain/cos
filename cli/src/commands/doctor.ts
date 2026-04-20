@@ -13,6 +13,7 @@ import {
   workItems,
   sessions as sessionsApi,
   cosLog,
+  cronTicks,
   notifications,
   plans as plansApi,
 } from "../db.js";
@@ -33,6 +34,7 @@ const SILENT_WORKER_MINUTES = 5;
 const CIRCUIT_BREAKER_MINUTES = 15;
 const DEFAULT_SESSION_ARCHIVE_DAYS = 7;
 const DEFAULT_PLAN_AGEOUT_DAYS = 7;
+const STALE_CRON_TICK_MINUTES = 15;
 
 // Doctor mutations that transition a session to a terminal state may only
 // touch rows whose status is in this set. Without this guard, an already-
@@ -898,6 +900,36 @@ export const checkInvariant12PlanAgeout = (
   return f;
 };
 
+// Invariant 13: cron_ticks rows stuck open past STALE_CRON_TICK_MINUTES. The
+// bash wrapper's finally-block normally closes each row; stream timeouts,
+// sleeps, or SIGKILLs bypass it and leave ended_at=NULL forever, which makes
+// every reader of cronTicks.current() lie about "tick in progress." Close the
+// row with rc=1 (unknown-failure) so the DB reflects reality.
+export const checkInvariant13StaleCronTick = (
+  opts: DoctorOptions,
+): DoctorFinding => {
+  const f = emptyFinding("stale-cron-tick");
+  const stale = cronTicks.listStale(STALE_CRON_TICK_MINUTES);
+  if (!stale.length) return f;
+  f.ok = false;
+  for (const row of stale) {
+    const age = minutesSince(row.started_at.replace(" ", "T") + "Z");
+    f.entries.push({
+      id: row.id,
+      reason: `cron_ticks row open for ${age.toFixed(1)} min (threshold ${STALE_CRON_TICK_MINUTES})`,
+      details: { started_at: row.started_at },
+    });
+    if (opts.autoFix && !opts.dryRun) {
+      cronTicks.end(row.id, 1);
+      f.fixed.push({
+        id: row.id,
+        action: "closed with rc=1 (unknown-failure)",
+      });
+    }
+  }
+  return f;
+};
+
 export const runDoctor = (opts: DoctorOptions): DoctorReport => {
   const findings: DoctorFinding[] = [
     checkInvariant1Zombie(opts),
@@ -912,6 +944,7 @@ export const runDoctor = (opts: DoctorOptions): DoctorReport => {
     checkInvariant10OldSessionArchive(opts),
     checkInvariant11PlannedParentRollup(opts),
     checkInvariant12PlanAgeout(opts),
+    checkInvariant13StaleCronTick(opts),
   ];
   const issues = findings.filter((f) => !f.ok).length;
   const fixed = findings.reduce((n, f) => n + f.fixed.length, 0);

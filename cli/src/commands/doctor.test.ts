@@ -7,8 +7,12 @@ import { ulid } from "ulid";
 const tmp = mkdtempSync(join(tmpdir(), "cos-doctor-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
-import { checkInvariant9StrandedWorkItem, runDoctor } from "./doctor.js";
-import { workItems, sessions, getDb } from "../db.js";
+import {
+  checkInvariant9StrandedWorkItem,
+  checkInvariant13StaleCronTick,
+  runDoctor,
+} from "./doctor.js";
+import { workItems, sessions, cronTicks, getDb } from "../db.js";
 import { displayWorkItemId } from "../util.js";
 
 afterAll(() => {
@@ -19,7 +23,7 @@ afterAll(() => {
 beforeEach(() => {
   const db = getDb();
   db.exec(
-    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log;",
+    "DELETE FROM work_items; DELETE FROM sessions; DELETE FROM notifications; DELETE FROM cos_log; DELETE FROM cron_ticks;",
   );
 });
 
@@ -342,5 +346,91 @@ describe("doctor: stranded-work-item invariant", () => {
       expect(wi.status).toBe("queued");
       expect(wi.session_id).toBeNull();
     }
+  });
+});
+
+describe("doctor: stale-cron-tick invariant", () => {
+  const backdateCronTick = (id: string, minutesAgo: number) => {
+    const when = new Date(Date.now() - minutesAgo * 60_000);
+    const stamp = when.toISOString().replace("T", " ").slice(0, 19);
+    getDb()
+      .prepare(`UPDATE cron_ticks SET started_at = ? WHERE id = ?`)
+      .run(stamp, id);
+  };
+
+  it("closes a cron_ticks row open for > 15 min with rc=1", () => {
+    cronTicks.start("tick-wedged");
+    backdateCronTick("tick-wedged", 45);
+
+    const finding = checkInvariant13StaleCronTick({
+      autoFix: true,
+      dryRun: false,
+      format: "json",
+    });
+
+    expect(finding.ok).toBe(false);
+    expect(finding.entries[0]?.id).toBe("tick-wedged");
+    expect(finding.fixed[0]?.id).toBe("tick-wedged");
+
+    expect(cronTicks.current()).toBeNull();
+    const last = cronTicks.lastCompleted();
+    expect(last?.id).toBe("tick-wedged");
+    expect(last?.rc).toBe(1);
+  });
+
+  it("leaves a fresh (< 15 min) in-progress row alone", () => {
+    cronTicks.start("tick-live");
+    backdateCronTick("tick-live", 3);
+
+    const finding = checkInvariant13StaleCronTick({
+      autoFix: true,
+      dryRun: false,
+      format: "json",
+    });
+
+    expect(finding.ok).toBe(true);
+    expect(finding.entries).toHaveLength(0);
+    expect(cronTicks.current()?.id).toBe("tick-live");
+  });
+
+  it("reports but does not mutate in dry-run", () => {
+    cronTicks.start("tick-dry");
+    backdateCronTick("tick-dry", 30);
+
+    const finding = checkInvariant13StaleCronTick({
+      autoFix: true,
+      dryRun: true,
+      format: "json",
+    });
+
+    expect(finding.ok).toBe(false);
+    expect(finding.fixed).toHaveLength(0);
+    expect(cronTicks.current()?.id).toBe("tick-dry");
+  });
+
+  it("reports but does not mutate when autoFix=false", () => {
+    cronTicks.start("tick-noauto");
+    backdateCronTick("tick-noauto", 30);
+
+    const finding = checkInvariant13StaleCronTick({
+      autoFix: false,
+      dryRun: false,
+      format: "json",
+    });
+
+    expect(finding.ok).toBe(false);
+    expect(finding.fixed).toHaveLength(0);
+    expect(cronTicks.current()?.id).toBe("tick-noauto");
+  });
+
+  it("closes multiple stale rows in one pass", () => {
+    cronTicks.start("tick-a");
+    cronTicks.start("tick-b");
+    backdateCronTick("tick-a", 60);
+    backdateCronTick("tick-b", 20);
+
+    runDoctor({ autoFix: true, dryRun: false, format: "json" });
+
+    expect(cronTicks.current()).toBeNull();
   });
 });
