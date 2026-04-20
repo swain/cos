@@ -2,11 +2,13 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "ulid";
+import chalk from "chalk";
 import {
   getDb,
   ideas,
   meetingPrepRuns,
   notifications,
+  plans,
   sessions,
   workItems,
 } from "../db.js";
@@ -26,10 +28,11 @@ import type { InboxDashboard, InboxItem } from "./types.js";
 const COS_BIN = join(COS_DIR, "bin/cos");
 const TMUX_WORKER_SESSION = "cos-workers";
 
-// `cos review` needs an interactive terminal (plannotator takes over stdio, then
-// we readline for the gh mirror). We can't inherit the inbox server's stdio, so
-// we ask Terminal.app to open a new window running the command. Darwin-only —
-// matches `cos dashboard`'s existing darwin gate.
+// Bulk PR review (`cos review <url1> <url2>...`) walks the URLs sequentially
+// with an interactive readline prompt for `gh pr review` mirror after each.
+// That needs a TTY, so the bulk flow still asks Terminal.app to open a window.
+// Single-plan and single-PR review no longer use this — they spawn plannotator
+// headlessly (see reviewPlanInPlannotator / reviewInPlannotator below).
 const openTerminalRunning = (command: string): boolean => {
   if (process.platform !== "darwin") return false;
   const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -605,47 +608,200 @@ export const submitPlanFeedback = async (
       };
 };
 
-// Opens `cos plan-review <plan-id>` in a new Terminal window. Plannotator
-// drives the highlight/comment UI; the wrapper prompts for approve /
-// feedback / skip on exit and persists the decision back to the plans row.
+// plannotator annotate emits "No changes detected." when the reviewer submits
+// feedback without any annotations and "No feedback provided." when the
+// feedback body itself is empty. Either sentinel → the reviewer approved; any
+// other non-empty body → resubmit with that feedback.
+export const parsePlannotatorAnnotateStdout = (
+  stdout: string,
+): { kind: "approve" } | { kind: "feedback"; body: string } => {
+  const trimmed = stdout.trim();
+  if (
+    trimmed === "" ||
+    trimmed === "No changes detected." ||
+    trimmed === "No feedback provided."
+  ) {
+    return { kind: "approve" };
+  }
+  return { kind: "feedback", body: trimmed };
+};
+
+// Spawns `plannotator annotate <plan.path>` headlessly. plannotator starts its
+// own local HTTP server and auto-opens the reviewer's default browser — no
+// Terminal window involved. When the reviewer clicks "Send feedback" in the
+// plannotator UI, plannotator writes the feedback body to stdout and exits;
+// we then mirror the decision back to the plans row via `cos plan-approve`
+// (empty feedback) or `cos plan-resubmit --feedback <body>` (non-empty).
 export const reviewPlanInPlannotator = async (
   planId: string,
 ): Promise<ActionResult> => {
   if (!planId) return { ok: false, message: "no plan id" };
-  const cmd = `${shellQuote(COS_BIN)} plan-review ${shellQuote(planId)}`;
-  if (!openTerminalRunning(cmd)) {
+  const plan = plans.get(planId);
+  if (!plan) return { ok: false, message: `plan not found: ${planId}` };
+  if (plan.status !== "awaiting-review") {
     return {
       ok: false,
-      message: `run manually: cos plan-review ${planId}`,
-      detail: `run manually: cos plan-review ${planId}`,
+      message: `plan ${planId} is ${plan.status}, not awaiting-review`,
     };
   }
+  if (!existsSync(plan.path)) {
+    return { ok: false, message: `plan file missing: ${plan.path}` };
+  }
+
+  let stdoutBuf = "";
+  let stderrBuf = "";
+  const BUF_CAP = 64_000;
+  let child;
+  try {
+    child = spawn("plannotator", ["annotate", plan.path], {
+      cwd: COS_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PLANNOTATOR_CWD: COS_DIR },
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      message: `failed to spawn plannotator: ${String(e)}`,
+    };
+  }
+  child.stdout?.on("data", (c) => {
+    if (stdoutBuf.length < BUF_CAP) stdoutBuf += c.toString();
+  });
+  child.stderr?.on("data", (c) => {
+    if (stderrBuf.length < BUF_CAP) stderrBuf += c.toString();
+  });
+  child.once("error", (err) => {
+    console.error(
+      chalk.red(
+        `[plannotator annotate] spawn failed for plan ${planId}: ${err.message}`,
+      ),
+    );
+  });
+  child.once("exit", async (code) => {
+    if (code !== 0) {
+      const tail = stderrBuf
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-3)
+        .join("\n");
+      console.error(
+        chalk.yellow(
+          `[plannotator annotate] plan ${planId} exited with code ${code}${
+            tail ? `\n${tail}` : ""
+          }`,
+        ),
+      );
+      return;
+    }
+    const decision = parsePlannotatorAnnotateStdout(stdoutBuf);
+    if (decision.kind === "approve") {
+      const r = await runCos(["plan-approve", planId]);
+      if (r.ok) {
+        console.log(chalk.green(`[plannotator annotate] approved ${planId}`));
+      } else {
+        console.error(
+          chalk.red(
+            `[plannotator annotate] plan-approve ${planId} failed: ${
+              r.stderr.trim().split("\n")[0] || "unknown"
+            }`,
+          ),
+        );
+      }
+      return;
+    }
+    const r = await runCos([
+      "plan-resubmit",
+      planId,
+      "--feedback",
+      decision.body,
+    ]);
+    if (r.ok) {
+      console.log(
+        chalk.green(`[plannotator annotate] feedback recorded for ${planId}`),
+      );
+    } else {
+      console.error(
+        chalk.red(
+          `[plannotator annotate] plan-resubmit ${planId} failed: ${
+            r.stderr.trim().split("\n")[0] || "unknown"
+          }`,
+        ),
+      );
+    }
+  });
+
   return {
     ok: true,
-    message: `opened plannotator for plan ${planId}`,
-    detail: `running in new Terminal: cos plan-review ${planId}`,
+    message: `plannotator opened for plan ${planId} — submit feedback in the new tab to approve or resubmit`,
   };
 };
 
-// Launches `cos review <pr-url>` in a new Terminal window. The user drives
-// plannotator there and, on exit, is prompted to mirror the decision to
-// GitHub via `gh pr review`. See cmdReviewPr in commands/review-pr.ts.
+// Spawns `plannotator review <pr-url>` headlessly. plannotator opens the
+// reviewer's default browser to show the diff; when they click "approve" or
+// send feedback the child exits with the result on stdout. We log the
+// outcome but do not auto-mirror to `gh pr review` — that interactive
+// mirror step lives in `cos review <url>` (bulk queue) where a Terminal
+// is available. For single-PR review from the dashboard, reviewers mirror
+// to GitHub manually if they want to.
 export const reviewInPlannotator = async (
   prUrl: string,
 ): Promise<ActionResult> => {
   if (!prUrl) return { ok: false, message: "no PR URL on this row" };
-  const cmd = `${shellQuote(COS_BIN)} review ${shellQuote(prUrl)}`;
-  if (!openTerminalRunning(cmd)) {
+
+  let stdoutBuf = "";
+  let stderrBuf = "";
+  const BUF_CAP = 64_000;
+  let child;
+  try {
+    child = spawn("plannotator", ["review", prUrl], {
+      cwd: COS_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PLANNOTATOR_CWD: COS_DIR },
+    });
+  } catch (e) {
     return {
       ok: false,
-      message: `run manually: cos review ${prUrl}`,
-      detail: `run manually: cos review ${prUrl}`,
+      message: `failed to spawn plannotator: ${String(e)}`,
     };
   }
+  child.stdout?.on("data", (c) => {
+    if (stdoutBuf.length < BUF_CAP) stdoutBuf += c.toString();
+  });
+  child.stderr?.on("data", (c) => {
+    if (stderrBuf.length < BUF_CAP) stderrBuf += c.toString();
+  });
+  child.once("error", (err) => {
+    console.error(
+      chalk.red(
+        `[plannotator review] spawn failed for ${prUrl}: ${err.message}`,
+      ),
+    );
+  });
+  child.once("exit", (code) => {
+    if (code !== 0) {
+      const tail = stderrBuf
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-3)
+        .join("\n");
+      console.error(
+        chalk.yellow(
+          `[plannotator review] ${prUrl} exited with code ${code}${
+            tail ? `\n${tail}` : ""
+          }`,
+        ),
+      );
+      return;
+    }
+    const body = stdoutBuf.trim();
+    if (!body) return;
+    const preview = body.length > 280 ? `${body.slice(0, 277)}…` : body;
+    console.log(chalk.cyan(`[plannotator review] ${prUrl} — ${preview}`));
+  });
+
   return {
     ok: true,
-    message: `opened plannotator for ${prUrl}`,
-    detail: `running in new Terminal: cos review ${prUrl}`,
+    message: `plannotator opened for ${prUrl} — mirror to gh pr review manually if needed`,
   };
 };
 
