@@ -19,6 +19,7 @@ import {
   type InboxDashboard,
   type InboxItem,
 } from "./types.js";
+import { upcomingMeetingsItems } from "./upcoming.js";
 
 const RECENT_WIN_WINDOW_MS = 24 * 60 * 60 * 1000;
 const STALE_TICK_MINUTES = 20;
@@ -351,6 +352,7 @@ export const collectDashboard = (): InboxDashboard => {
     review: reviewItems().sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     ),
+    upcoming: upcomingMeetingsItems(),
     fyi: fyiItems(displayIds),
     recentWins: recentWinItems(),
     triagedIdeasCount: triagedIdeasCount(),
