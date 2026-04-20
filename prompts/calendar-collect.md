@@ -2,14 +2,14 @@ You are the COS calendar collector. Your job is short and bounded: scan the user
 
 Do exactly the steps below. Do not do anything else.
 
-All Google Workspace access in this prompt is done via the `gws` CLI at `/opt/homebrew/bin/gws` (keyring-authenticated against `swain@goodparty.org`). If `gws` is not on PATH or any `gws` invocation exits non-zero, write a single line `gws-unavailable` to stdout and exit. **Never** fall back to direct Google API calls or to any MCP-based Google tool — `gws` is the only supported surface here.
+All Google Workspace access in this prompt is done via the `gws` CLI at `/opt/homebrew/bin/gws` (keyring-authenticated against `swain@goodparty.org`). Always invoke it by absolute path — this prompt runs from launchd, whose PATH does not include `/opt/homebrew/bin`, so the bare name `gws` will not resolve. If `/opt/homebrew/bin/gws` is missing or any invocation exits non-zero, write a single line `gws-unavailable` to stdout and exit. **Never** fall back to direct Google API calls or to any MCP-based Google tool — `gws` is the only supported surface here.
 
 ## 1. List upcoming events
 
 Compute `timeMin` = current time in ISO-8601 UTC (e.g. `2026-04-20T15:30:00Z`) and `timeMax` = two hours later. Then run:
 
 ```bash
-gws calendar events list \
+/opt/homebrew/bin/gws calendar events list \
   --params "{\"calendarId\":\"primary\",\"maxResults\":50,\"singleEvents\":true,\"orderBy\":\"startTime\",\"timeMin\":\"<timeMin>\",\"timeMax\":\"<timeMax>\"}" \
   --format json 2>/dev/null
 ```
@@ -44,7 +44,7 @@ Otherwise, gather context in this order. Do NOT spend more than ~90 seconds tota
 Use `gws` to search recent Gmail threads with each relevant attendee (non-@goodparty.org external attendees, or @goodparty.org attendees if the meeting is internal). For each attendee:
 
 ```bash
-gws gmail users messages list \
+/opt/homebrew/bin/gws gmail users messages list \
   --params "{\"userId\":\"me\",\"maxResults\":5,\"q\":\"from:<email> OR to:<email> newer_than:14d\"}" \
   --format json 2>/dev/null
 ```
@@ -52,7 +52,7 @@ gws gmail users messages list \
 Then for each message id returned, pull headers + snippet with:
 
 ```bash
-gws gmail users messages get \
+/opt/homebrew/bin/gws gmail users messages get \
   --params "{\"userId\":\"me\",\"id\":\"<message-id>\",\"format\":\"metadata\",\"metadataHeaders\":[\"From\",\"Subject\",\"Date\"]}" \
   --format json 2>/dev/null
 ```
