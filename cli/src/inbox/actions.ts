@@ -410,10 +410,41 @@ export const markAllFyiRead = async (
 // yellow badge.
 const PREP_COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;
 const NO_PREP_SENTINEL = "no-prep-needed";
+const GWS_FETCH_FAILED_SENTINEL = "gws-event-fetch-failed";
+const GWS_UNAVAILABLE_SENTINEL = "gws-unavailable";
 
 const lastNonEmptyLines = (s: string, n: number): string => {
   const lines = s.split(/\r?\n/).filter((l) => l.trim().length > 0);
   return lines.slice(-n).join("\n");
+};
+
+// Classifies a successful (exit 0) collector run by scanning combined
+// stdout/stderr for known sentinels. Callers still check exit code and signal
+// themselves before calling into this — this function only decides between
+// the happy-path outcomes plus the gws-event-fetch-failed infra-break.
+export type PrepOutcome =
+  | { kind: "ready" }
+  | { kind: "no-prep-needed" }
+  | { kind: "gws-fetch-failed"; reason: string };
+
+export const classifyCollectorOutput = (combined: string): PrepOutcome => {
+  const lower = combined.toLowerCase();
+  if (lower.includes(GWS_FETCH_FAILED_SENTINEL)) {
+    return {
+      kind: "gws-fetch-failed",
+      reason: "couldn't fetch event (gws calendar events get failed)",
+    };
+  }
+  if (lower.includes(GWS_UNAVAILABLE_SENTINEL)) {
+    return {
+      kind: "gws-fetch-failed",
+      reason: "gws CLI unavailable — check /opt/homebrew/bin/gws",
+    };
+  }
+  if (lower.includes(NO_PREP_SENTINEL)) {
+    return { kind: "no-prep-needed" };
+  }
+  return { kind: "ready" };
 };
 
 export const prepMeetingNow = async (
@@ -471,7 +502,10 @@ export const prepMeetingNow = async (
   }, PREP_COLLECTOR_TIMEOUT_MS);
   timeoutHandle.unref();
 
-  const settle = (status: "ready" | "no-prep-needed" | "failed") => {
+  const settle = (
+    status: "ready" | "no-prep-needed" | "failed",
+    failureReason?: string,
+  ) => {
     const prepPath = `${MEETINGS_DIR}/${slug}.md`;
     const hasFile = existsSync(prepPath);
     const tail = (s: string) => lastNonEmptyLines(s, 3) || null;
@@ -498,7 +532,11 @@ export const prepMeetingNow = async (
       meetingPrepRuns.finish(runId, {
         status: "failed",
         exit_code: null,
-        error: tail(stderrBuf) ?? tail(stdoutBuf) ?? "collector failed",
+        error:
+          failureReason ??
+          tail(stderrBuf) ??
+          tail(stdoutBuf) ??
+          "collector failed",
       });
     }
     invalidateUpcomingCache();
@@ -507,7 +545,6 @@ export const prepMeetingNow = async (
   child.once("exit", (code, sig) => {
     clearTimeout(timeoutHandle);
     const combined = stdoutBuf + "\n" + stderrBuf;
-    const sawNoPrep = combined.toLowerCase().includes(NO_PREP_SENTINEL);
     if (sig === "SIGTERM") {
       meetingPrepRuns.finish(runId, {
         status: "failed",
@@ -521,7 +558,12 @@ export const prepMeetingNow = async (
       settle("failed");
       return;
     }
-    settle(sawNoPrep ? "no-prep-needed" : "ready");
+    const outcome = classifyCollectorOutput(combined);
+    if (outcome.kind === "gws-fetch-failed") {
+      settle("failed", outcome.reason);
+      return;
+    }
+    settle(outcome.kind);
   });
   child.once("error", (err) => {
     clearTimeout(timeoutHandle);
