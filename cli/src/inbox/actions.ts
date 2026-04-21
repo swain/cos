@@ -1,5 +1,5 @@
 import { spawn, execSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "ulid";
 import chalk from "chalk";
@@ -403,8 +403,9 @@ export const markAllFyiRead = async (
 // on the way out: collector stdout is scanned for the `no-prep-needed`
 // sentinel, stderr is tail-clipped for failure messaging, and the prep
 // file path is checked on disk. If the inbox server is restarted before
-// the child exits, reconcileOrphanedPrepRuns() (called at server boot)
-// sweeps the row to `failed` — "timeout (server restarted)".
+// the child exits, reconcilePrepRuns() picks up on the next render or boot:
+// PID-alive rows stay running, PID-dead rows settle to ready (file on
+// disk) or failed (no file) without implementation-leak copy.
 //
 // We cap the collector's wall time at 5 min. Claude-p occasionally stalls
 // on MCP auth and we'd rather surface a failure than a silently-stuck
@@ -453,8 +454,11 @@ export const prepMeetingNow = async (
 ): Promise<ActionResult> => {
   if (!eventId) return { ok: false, message: "no event id" };
 
-  // If there's already a running row for this event, don't spawn a duplicate —
-  // just return ok so the UI stays responsive. The badge is already yellow.
+  // If there's already a running row for this event, reconcile it first —
+  // a previous spawn may have been orphaned by an inbox-serve restart and is
+  // no longer alive, in which case we want to start fresh rather than
+  // short-circuit on a stale row.
+  reconcilePrepRuns();
   const existing = meetingPrepRuns.latestForEvent(eventId);
   if (existing && existing.status === "running") {
     return { ok: true, message: `prep already running for ${eventId}` };
@@ -463,7 +467,6 @@ export const prepMeetingNow = async (
   const upcoming = findUpcomingMeetingById(eventId);
   const slug = upcoming?.prepSlug ?? eventId;
   const runId = `mpr-${ulid()}`;
-  meetingPrepRuns.start({ id: runId, event_id: eventId, slug });
 
   let child;
   try {
@@ -472,6 +475,9 @@ export const prepMeetingNow = async (
       detached: true,
     });
   } catch (e) {
+    // Insert the row only so we can immediately close it out — keeps the
+    // audit trail consistent with the happy path.
+    meetingPrepRuns.start({ id: runId, event_id: eventId, slug });
     meetingPrepRuns.finish(runId, {
       status: "failed",
       error: `failed to spawn collector: ${String(e)}`,
@@ -480,8 +486,16 @@ export const prepMeetingNow = async (
     return { ok: false, message: `failed to spawn collector: ${String(e)}` };
   }
 
+  meetingPrepRuns.start({
+    id: runId,
+    event_id: eventId,
+    slug,
+    pid: child.pid ?? null,
+  });
+
   // Detached + unref so the child keeps running if the parent exits for a
-  // deploy; the reconcile sweep handles the orphan case on next boot.
+  // deploy; reconcilePrepRuns() handles the orphan case on next render / boot
+  // by checking PID liveness and filesystem.
   child.unref();
 
   let stdoutBuf = "";
@@ -579,21 +593,66 @@ export const prepMeetingNow = async (
   return { ok: true, message: `queued prep for ${eventId}` };
 };
 
-// Walked at inbox-serve boot. Any `meeting_prep_runs` row still marked
-// running belongs to a child that died with its parent — launchd kickstart
-// after a merge, OS reboot, etc. Marks them failed so the dashboard doesn't
-// paint a stuck yellow badge forever. Intentionally does not look at the
-// filesystem: if the file landed post-exit, the prep-ready rule
-// (file-on-disk wins) in upcoming.ts already takes precedence.
-export const reconcileOrphanedPrepRuns = (): number => {
-  const running = meetingPrepRuns.listRunning();
-  for (const r of running) {
-    meetingPrepRuns.finish(r.id, {
-      status: "failed",
-      error: "collector orphaned (inbox-serve restarted before child exited)",
-    });
+const INTERRUPTED_ERROR = "Collector interrupted — retry";
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    // EPERM → process exists but we lack permission to signal. Treat as alive.
+    return e?.code === "EPERM";
   }
-  return running.length;
+};
+
+const parseStartedAtMs = (ts: string): number => {
+  const iso = ts.includes("T") ? ts : ts.replace(" ", "T");
+  const withZ = iso.endsWith("Z") ? iso : `${iso}Z`;
+  const t = new Date(withZ).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+// Reconciles `meeting_prep_runs` rows still marked `running`. Safe to call
+// repeatedly — called at inbox-serve boot and on each upcoming render so a
+// child that finishes after its parent died doesn't leave the row stuck.
+//
+// Per row:
+//   - PID alive                                  → leave running
+//   - PID dead + prep file on disk (mtime > run) → mark ready
+//   - PID dead + no prep file                    → mark failed (friendly copy)
+//   - No PID recorded (legacy)                   → mark failed (friendly copy)
+//
+// Returns the number of rows transitioned out of running.
+export const reconcilePrepRuns = (): number => {
+  const running = meetingPrepRuns.listRunning();
+  let reconciled = 0;
+  for (const r of running) {
+    if (r.pid && isProcessAlive(r.pid)) continue;
+    const prepPath = `${MEETINGS_DIR}/${r.slug}.md`;
+    let fileMtimeMs = 0;
+    if (existsSync(prepPath)) {
+      try {
+        fileMtimeMs = statSync(prepPath).mtimeMs;
+      } catch {
+        fileMtimeMs = 0;
+      }
+    }
+    const startedMs = parseStartedAtMs(r.started_at);
+    if (fileMtimeMs > 0 && fileMtimeMs >= startedMs) {
+      meetingPrepRuns.finish(r.id, {
+        status: "ready",
+        exit_code: null,
+        prep_file_path: prepPath,
+      });
+    } else {
+      meetingPrepRuns.finish(r.id, {
+        status: "failed",
+        error: INTERRUPTED_ERROR,
+      });
+    }
+    reconciled++;
+  }
+  return reconciled;
 };
 
 // Prep-feedback capture: the user jots a line on the prep page saying whether

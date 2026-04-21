@@ -1,15 +1,22 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const tmp = mkdtempSync(join(tmpdir(), "cos-upcoming-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
+// Redirect HOME so util.ts's MEETINGS_DIR resolves under the test tempdir
+// instead of touching the user's real ~/.claude/cos/meetings.
+process.env.HOME = tmp;
 
 const { getDb, meetingPrepRuns } = await import("../db.js");
-const { reconcileOrphanedPrepRuns, classifyCollectorOutput } =
+const { reconcilePrepRuns, classifyCollectorOutput } =
   await import("./actions.js");
 const { formatMeetingWhen, upcomingToItem } = await import("./upcoming.js");
+const { MEETINGS_DIR } = await import("../util.js");
+
+mkdirSync(MEETINGS_DIR, { recursive: true });
 
 afterAll(() => {
   getDb().close();
@@ -55,13 +62,79 @@ describe("meetingPrepRuns", () => {
     expect(map.has("e-missing")).toBe(false);
   });
 
-  it("reconcileOrphanedPrepRuns marks stuck running rows as failed", () => {
+  it("reconcilePrepRuns fails a legacy row with no pid (no file on disk)", () => {
     meetingPrepRuns.start({ id: "mpr-stuck", event_id: "evt-3", slug: "s" });
-    const n = reconcileOrphanedPrepRuns();
+    const n = reconcilePrepRuns();
     expect(n).toBe(1);
     const r = meetingPrepRuns.latestForEvent("evt-3")!;
     expect(r.status).toBe("failed");
-    expect(r.error).toMatch(/orphaned/);
+    // User-facing copy must not leak "inbox-serve restarted" or similar.
+    expect(r.error).toBe("Collector interrupted — retry");
+    expect(r.error).not.toMatch(/inbox-serve/);
+    expect(r.error).not.toMatch(/orphaned/);
+  });
+
+  it("reconcilePrepRuns leaves a running row alone when its pid is still alive", async () => {
+    // Spawn a short sleep child we can later tear down; the pid will be alive
+    // during the reconcile call.
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        stdio: "ignore",
+        detached: true,
+      },
+    );
+    child.unref();
+    try {
+      meetingPrepRuns.start({
+        id: "mpr-alive",
+        event_id: "evt-alive",
+        slug: "s-alive",
+        pid: child.pid!,
+      });
+      const n = reconcilePrepRuns();
+      expect(n).toBe(0);
+      const r = meetingPrepRuns.latestForEvent("evt-alive")!;
+      expect(r.status).toBe("running");
+    } finally {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  });
+
+  it("reconcilePrepRuns settles a dead-pid row to ready when a prep file exists", () => {
+    const slug = "evt-ready-slug";
+    const path = `${MEETINGS_DIR}/${slug}.md`;
+    writeFileSync(path, "# prep\n", "utf8");
+    meetingPrepRuns.start({
+      id: "mpr-ready",
+      event_id: "evt-ready",
+      slug,
+      pid: 999_999_999, // unlikely to collide with a live pid
+    });
+    const n = reconcilePrepRuns();
+    expect(n).toBe(1);
+    const r = meetingPrepRuns.latestForEvent("evt-ready")!;
+    expect(r.status).toBe("ready");
+    expect(r.prep_file_path).toBe(path);
+  });
+
+  it("reconcilePrepRuns fails a dead-pid row with user-friendly copy when no file", () => {
+    meetingPrepRuns.start({
+      id: "mpr-dead",
+      event_id: "evt-dead",
+      slug: "evt-dead-no-file",
+      pid: 999_999_999,
+    });
+    const n = reconcilePrepRuns();
+    expect(n).toBe(1);
+    const r = meetingPrepRuns.latestForEvent("evt-dead")!;
+    expect(r.status).toBe("failed");
+    expect(r.error).toBe("Collector interrupted — retry");
   });
 });
 

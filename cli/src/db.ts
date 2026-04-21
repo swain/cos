@@ -105,6 +105,9 @@ const migrate = (db: Database.Database) => {
   if (!hasColumn(db, "ideas", "triaged_at")) {
     db.exec(`ALTER TABLE ideas ADD COLUMN triaged_at TEXT`);
   }
+  if (!hasColumn(db, "meeting_prep_runs", "pid")) {
+    db.exec(`ALTER TABLE meeting_prep_runs ADD COLUMN pid INTEGER`);
+  }
   // Indexes run after ALTER so they work on both fresh (schema.sql created the
   // columns) and migrated DBs (ALTER just created them).
   db.exec(
@@ -812,6 +815,7 @@ export type MeetingPrepRun = {
   exit_code: number | null;
   prep_file_path: string | null;
   error: string | null;
+  pid: number | null;
 };
 
 const rowToMeetingPrepRun = (r: any): MeetingPrepRun => ({
@@ -824,15 +828,21 @@ const rowToMeetingPrepRun = (r: any): MeetingPrepRun => ({
   exit_code: r.exit_code ?? null,
   prep_file_path: r.prep_file_path ?? null,
   error: r.error ?? null,
+  pid: r.pid ?? null,
 });
 
 export const meetingPrepRuns = {
-  start(run: { id: string; event_id: string; slug: string }) {
+  start(run: {
+    id: string;
+    event_id: string;
+    slug: string;
+    pid?: number | null;
+  }) {
     getDb()
       .prepare(
-        `INSERT INTO meeting_prep_runs (id, event_id, slug, status) VALUES (@id, @event_id, @slug, 'running')`,
+        `INSERT INTO meeting_prep_runs (id, event_id, slug, status, pid) VALUES (@id, @event_id, @slug, 'running', @pid)`,
       )
-      .run(run);
+      .run({ ...run, pid: run.pid ?? null });
   },
   finish(
     id: string,

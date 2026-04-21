@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS meeting_prep_runs (
   finished_at    TEXT,
   exit_code      INTEGER,
   prep_file_path TEXT,
-  error          TEXT
+  error          TEXT,
+  pid            INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_event ON meeting_prep_runs(event_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meeting_prep_runs_status ON meeting_prep_runs(status);
