@@ -13,6 +13,7 @@ import {
   workItems,
 } from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
+import { decidePlanReviewAction } from "../commands/plans.js";
 import {
   COS_DIR,
   displayWorkItemId,
@@ -608,30 +609,15 @@ export const submitPlanFeedback = async (
       };
 };
 
-// plannotator annotate emits "No changes detected." when the reviewer submits
-// feedback without any annotations and "No feedback provided." when the
-// feedback body itself is empty. Either sentinel → the reviewer approved; any
-// other non-empty body → resubmit with that feedback.
-export const parsePlannotatorAnnotateStdout = (
-  stdout: string,
-): { kind: "approve" } | { kind: "feedback"; body: string } => {
-  const trimmed = stdout.trim();
-  if (
-    trimmed === "" ||
-    trimmed === "No changes detected." ||
-    trimmed === "No feedback provided."
-  ) {
-    return { kind: "approve" };
-  }
-  return { kind: "feedback", body: trimmed };
-};
-
 // Spawns `plannotator annotate <plan.path>` headlessly. plannotator starts its
 // own local HTTP server and auto-opens the reviewer's default browser — no
-// Terminal window involved. When the reviewer clicks "Send feedback" in the
-// plannotator UI, plannotator writes the feedback body to stdout and exits;
-// we then mirror the decision back to the plans row via `cos plan-approve`
-// (empty feedback) or `cos plan-resubmit --feedback <body>` (non-empty).
+// Terminal window involved. When the reviewer clicks "Send feedback" with
+// annotations, plannotator writes the feedback body to stdout on exit and we
+// auto-`cos plan-resubmit --feedback <body>`. If plannotator exits without a
+// usable body (closed tab, no annotations, etc.), we leave the plan row in
+// `awaiting-review` — the reviewer can approve or dismiss from the dashboard.
+// Sentinel semantics (`No feedback provided.` = empty) are shared with
+// `cos plan-review` via `decidePlanReviewAction`.
 export const reviewPlanInPlannotator = async (
   planId: string,
 ): Promise<ActionResult> => {
@@ -693,27 +679,20 @@ export const reviewPlanInPlannotator = async (
       );
       return;
     }
-    const decision = parsePlannotatorAnnotateStdout(stdoutBuf);
-    if (decision.kind === "approve") {
-      const r = await runCos(["plan-approve", planId]);
-      if (r.ok) {
-        console.log(chalk.green(`[plannotator annotate] approved ${planId}`));
-      } else {
-        console.error(
-          chalk.red(
-            `[plannotator annotate] plan-approve ${planId} failed: ${
-              r.stderr.trim().split("\n")[0] || "unknown"
-            }`,
-          ),
-        );
-      }
+    const decision = decidePlanReviewAction(stdoutBuf);
+    if (decision.kind !== "resubmit") {
+      console.log(
+        chalk.gray(
+          `[plannotator annotate] ${planId} exited without a feedback body; plan stays awaiting-review`,
+        ),
+      );
       return;
     }
     const r = await runCos([
       "plan-resubmit",
       planId,
       "--feedback",
-      decision.body,
+      decision.feedback,
     ]);
     if (r.ok) {
       console.log(
