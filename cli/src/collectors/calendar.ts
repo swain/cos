@@ -21,7 +21,7 @@ You are being invoked to prepare exactly one event. Do NOT scan the next 2h wind
 1. Fetch the event:
    /opt/homebrew/bin/gws calendar events get --params '{"calendarId":"primary","eventId":"${eventId}"}' --format json 2>/dev/null
    (Suppress stderr so the keyring line does not pollute JSON parsing. Use the absolute path — launchd's PATH does not include /opt/homebrew/bin.)
-2. Run sections 3 (context gathering), 4 (write prep file), and 5 (signal + notification) of the instructions below, but ONLY for that one event. Skip sections 1 and 2 entirely.
+2. Run sections 0 (load priorities), 3 (context gathering), 4 (write prep file), and 5 (signal + notification) of the instructions below, but ONLY for that one event. Skip sections 1 and 2 entirely.
 3. If the event is in the past, cancelled, or has no other attendees, print \`no-prep-needed\` and exit.
 4. If a prep file already exists for the event's date+slug, overwrite it — the ad-hoc Prep Now action is an explicit refresh request from the user.
 5. If \`gws calendar events get\` exits non-zero, \`/opt/homebrew/bin/gws\` is missing, or the event doesn't exist, print \`gws-event-fetch-failed\` to stdout (not \`no-prep-needed\`) and exit. This distinguishes user-declined-to-prep from infrastructure-broken so the dashboard can render the two outcomes differently.

@@ -1,5 +1,5 @@
 import { spawn, execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ulid } from "ulid";
 import chalk from "chalk";
@@ -10,6 +10,7 @@ import {
   notifications,
   plans,
   sessions,
+  signals,
   workItems,
 } from "../db.js";
 import { cmdEnqueue } from "../commands/enqueue.js";
@@ -593,6 +594,53 @@ export const reconcileOrphanedPrepRuns = (): number => {
     });
   }
   return running.length;
+};
+
+// Prep-feedback capture: the user jots a line on the prep page saying whether
+// the prep was useful. We persist it to a human-readable log AND drop a signal
+// so Po sees it on the next cron tick. Po triages the signal to a normal
+// notification — no auto-rewrite of the collector prompt (that's feature-creep
+// territory; the user makes the call).
+export const submitPrepFeedback = async (
+  eventId: string,
+  feedback: string,
+): Promise<ActionResult> => {
+  if (!eventId) return { ok: false, message: "no event id" };
+  const trimmed = feedback.trim();
+  if (!trimmed) return { ok: false, message: "empty feedback" };
+
+  const upcoming = findUpcomingMeetingById(eventId);
+  const slug = upcoming?.prepSlug ?? null;
+  const summary = upcoming?.summary ?? null;
+
+  const logPath = `${MEETINGS_DIR}/feedback.log`;
+  try {
+    mkdirSync(MEETINGS_DIR, { recursive: true });
+    const ts = new Date().toISOString();
+    const header = summary
+      ? `[${ts}] event_id=${eventId} slug=${slug ?? "-"} summary=${JSON.stringify(summary)}`
+      : `[${ts}] event_id=${eventId} slug=${slug ?? "-"}`;
+    appendFileSync(logPath, `${header}\n${trimmed}\n\n`, "utf8");
+  } catch (e) {
+    return { ok: false, message: `failed to write feedback log: ${String(e)}` };
+  }
+
+  signals.insert({
+    id: `sig-${ulid()}`,
+    source: "meeting-prep",
+    kind: "meeting-prep-feedback",
+    external_id: null,
+    payload: {
+      event_id: eventId,
+      slug,
+      summary,
+      feedback: trimmed,
+    },
+    status: "new",
+    triaged_at: null,
+  });
+
+  return { ok: true, message: `feedback filed for ${eventId}` };
 };
 
 // Opens the prep .md file in the user's default macOS handler. darwin-only.
