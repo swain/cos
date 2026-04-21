@@ -11,10 +11,12 @@ COS_DIR="$CLAUDE_DIR/cos"
 COMMANDS_DIR="$CLAUDE_DIR/commands"
 LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 LABEL="${COS_LAUNCHD_LABEL:-com.$(whoami).cos.cron}"
+CALENDAR_LABEL="${COS_CALENDAR_LAUNCHD_LABEL:-com.$(whoami).cos.calendar}"
 
 echo "==> COS install from: $REPO_ROOT"
-echo "    target:         $CLAUDE_DIR"
-echo "    launchd label:  $LABEL"
+echo "    target:          $CLAUDE_DIR"
+echo "    cron label:      $LABEL"
+echo "    calendar label:  $CALENDAR_LABEL"
 echo
 
 # ----- Prereqs -----
@@ -118,7 +120,7 @@ echo
 echo "==> Running cos init…"
 "$COS_DIR/bin/cos" init
 
-# ----- Render launchd plist -----
+# ----- Render launchd plists -----
 echo
 echo "==> Rendering launchd plist as ${LABEL}…"
 PLIST_OUT="$LAUNCHD_DIR/$LABEL.plist"
@@ -128,20 +130,34 @@ sed \
   "$REPO_ROOT/launchd/com.cos.cron.plist.template" > "$PLIST_OUT"
 plutil -lint "$PLIST_OUT" >/dev/null && echo "    $PLIST_OUT (valid plist)"
 
-# ----- Reload launchd agent if already loaded -----
-# Re-render above is inert until launchd picks up the new plist. If the agent
-# is already loaded, bootout + bootstrap + kickstart so plist changes (e.g.
-# WakeSystem) take effect in the same `install.sh` run. If not loaded, fall
-# through to the "Next steps" hint below.
+echo "==> Rendering launchd plist as ${CALENDAR_LABEL}…"
+CALENDAR_PLIST_OUT="$LAUNCHD_DIR/$CALENDAR_LABEL.plist"
+sed \
+  -e "s|{{LABEL}}|$CALENDAR_LABEL|g" \
+  -e "s|{{USER_HOME}}|$HOME|g" \
+  "$REPO_ROOT/launchd/com.cos.calendar.plist.template" > "$CALENDAR_PLIST_OUT"
+plutil -lint "$CALENDAR_PLIST_OUT" >/dev/null && echo "    $CALENDAR_PLIST_OUT (valid plist)"
+
+# ----- Bootstrap / reload launchd agents -----
+# Re-render above is inert until launchd picks up the new plist. Bootstrap if
+# missing; bootout+bootstrap+kickstart if already loaded so plist changes take
+# effect in the same `install.sh` run. Idempotent: safe to re-run.
 UID_N="$(id -u)"
-if launchctl print "gui/$UID_N/$LABEL" >/dev/null 2>&1; then
-  echo
-  echo "==> Reloading launchd agent ${LABEL} to pick up plist changes…"
-  launchctl bootout "gui/$UID_N/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID_N" "$PLIST_OUT"
-  launchctl kickstart "gui/$UID_N/$LABEL"
-  echo "    reloaded"
-fi
+
+reload_agent() {
+  local label="$1" plist_path="$2"
+  if launchctl print "gui/$UID_N/$label" >/dev/null 2>&1; then
+    echo
+    echo "==> Reloading launchd agent ${label} to pick up plist changes…"
+    launchctl bootout "gui/$UID_N/$label" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID_N" "$plist_path"
+    launchctl kickstart "gui/$UID_N/$label"
+    echo "    reloaded"
+  fi
+}
+
+reload_agent "$LABEL" "$PLIST_OUT"
+reload_agent "$CALENDAR_LABEL" "$CALENDAR_PLIST_OUT"
 
 echo
 echo "✅ COS installed."
@@ -150,9 +166,11 @@ echo "Next steps:"
 echo "  1) Fill in $COS_DIR/team.md and $COS_DIR/priorities.md with your real context."
 echo "  2) Review $COS_DIR/arch.md and $COS_DIR/ai-native.md — customize to your stack."
 echo "  3) Update $COS_DIR/watched-repos.json with repos you want COS to monitor."
-echo "  4) Load the launchd agent:"
+echo "  4) Load the launchd agents:"
 echo "       launchctl bootstrap gui/\$(id -u) $PLIST_OUT"
 echo "       launchctl kickstart gui/\$(id -u)/$LABEL"
+echo "       launchctl bootstrap gui/\$(id -u) $CALENDAR_PLIST_OUT"
+echo "       launchctl kickstart gui/\$(id -u)/$CALENDAR_LABEL"
 echo "  5) To unpause auto-dispatch when you're ready:"
 echo "       jq '.dispatch_paused=false' $COS_DIR/config.json > /tmp/c && mv /tmp/c $COS_DIR/config.json"
 echo
