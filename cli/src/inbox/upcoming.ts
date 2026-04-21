@@ -54,6 +54,13 @@ export type UpcomingMeeting = {
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const LOOKAHEAD_MS = 8 * 60 * 60 * 1000;
+// Keep a meeting visible for this long after its scheduled end so the Open
+// Prep link and join link stay reachable while the meeting is underway and
+// for a short tail afterwards.
+const POST_END_TAIL_MS = 30 * 60 * 1000;
+// Fallback duration when the event has no parseable end time (all-day rows
+// don't get this far, but malformed end.dateTime payloads can still show up).
+const DEFAULT_MEETING_DURATION_MS = 60 * 60 * 1000;
 
 // Block "meeting-ish" events only. Working location, OOO, focus time and
 // all-day events are calendar noise for this surface. Also drop events the
@@ -210,10 +217,16 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
     const startIso = e.start!.dateTime!;
     const startMs = new Date(startIso).getTime();
     if (Number.isNaN(startMs)) continue;
-    if (startMs < now) continue;
     if (startMs - now > LOOKAHEAD_MS) continue;
-    const endIso = e.end?.dateTime ?? startIso;
-    const endMs = new Date(endIso).getTime() || startMs;
+    const rawEndMs = e.end?.dateTime ? new Date(e.end.dateTime).getTime() : NaN;
+    const endMs =
+      Number.isFinite(rawEndMs) && rawEndMs > startMs
+        ? rawEndMs
+        : startMs + DEFAULT_MEETING_DURATION_MS;
+    // Drop once the meeting has been over for more than the tail window. This
+    // is the only past-event filter — before-start and in-progress rows fall
+    // through intentionally.
+    if (endMs + POST_END_TAIL_MS <= now) continue;
 
     const slug = prepSlug(e.summary ?? "meeting", startIso);
     const hasFile = prepIndex.byExact.has(slug);
@@ -309,15 +322,52 @@ export const formatRelativeStart = (ms: number, nowMs = Date.now()): string => {
   return `tomorrow ${formatAbsoluteLocal(ms)}`;
 };
 
+export type MeetingPhase = "before-start" | "in-progress" | "just-ended";
+
+const formatMinutesShort = (min: number): string => {
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
+
+// Pick the "when" label for the row based on which side of start/end we're on.
+// Reused by upcomingToItem; exported so tests can assert the decision table
+// without reaching through meta plumbing.
+export const formatMeetingWhen = (
+  startMs: number,
+  endMs: number,
+  nowMs = Date.now(),
+): { label: string; phase: MeetingPhase } => {
+  if (nowMs < startMs) {
+    return {
+      label: formatRelativeStart(startMs, nowMs),
+      phase: "before-start",
+    };
+  }
+  if (nowMs < endMs) {
+    const since = Math.max(1, Math.round((nowMs - startMs) / 60_000));
+    return {
+      label: `live · started ${formatMinutesShort(since)} ago`,
+      phase: "in-progress",
+    };
+  }
+  const since = Math.max(1, Math.round((nowMs - endMs) / 60_000));
+  return {
+    label: `ended ${formatMinutesShort(since)} ago`,
+    phase: "just-ended",
+  };
+};
+
 export const upcomingToItem = (
   m: UpcomingMeeting,
   nowMs = Date.now(),
 ): InboxItem => {
-  const rel = formatRelativeStart(m.startMs, nowMs);
+  const when = formatMeetingWhen(m.startMs, m.endMs, nowMs);
   const abs = formatAbsoluteLocal(m.startMs);
   const attendeeLabel =
     m.attendeeCount === 1 ? "1 attendee" : `${m.attendeeCount} attendees`;
-  const body = `${rel} · ${abs} · ${attendeeLabel}`;
+  const body = `${when.label} · ${abs} · ${attendeeLabel}`;
   return {
     key: `upcoming:${m.id}`,
     kind: "upcoming-meeting",
@@ -337,7 +387,8 @@ export const upcomingToItem = (
       prepSlug: m.prepSlug,
       prepError: m.prepError,
       hangoutLink: m.hangoutLink,
-      relative: rel,
+      relative: when.label,
+      phase: when.phase,
       absolute: abs,
     },
   };
