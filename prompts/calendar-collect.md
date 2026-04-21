@@ -25,7 +25,7 @@ From `.items[]`, skip:
 - All-day events (any item whose `start` has a `date` field instead of `dateTime`).
 - Working-location / out-of-office holds: `eventType == "workingLocation"` or `eventType == "outOfOffice"`.
 - Events the user has declined — i.e. the attendee matching the user's email has `responseStatus == "declined"`.
-- Events with no other attendees (solo holds, focus blocks): `attendees` missing or containing only the user.
+- **Solo events — `attendees` missing, empty, or containing only the user (`swain@goodparty.org`).** Count non-self attendees (filter out rows where `self == true`, `resource == true`, or email matches the user). If the count is 0, skip the event entirely. Do NOT proceed to Gmail, ClickUp, or context-gathering for solo events — they can never produce useful prep.
 
 For each remaining event, capture: `id`, `summary`, `start.dateTime`, `end.dateTime`, `location`, `hangoutLink`/`conferenceData`, `htmlLink`, `attendees[].email`, `attendees[].displayName`, `description`, `attachments`.
 

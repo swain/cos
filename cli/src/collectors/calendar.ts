@@ -21,10 +21,11 @@ You are being invoked to prepare exactly one event. Do NOT scan the next 2h wind
 1. Fetch the event:
    /opt/homebrew/bin/gws calendar events get --params '{"calendarId":"primary","eventId":"${eventId}"}' --format json 2>/dev/null
    (Suppress stderr so the keyring line does not pollute JSON parsing. Use the absolute path — launchd's PATH does not include /opt/homebrew/bin.)
-2. Run sections 0 (load priorities), 3 (context gathering), 4 (write prep file), and 5 (signal + notification) of the instructions below, but ONLY for that one event. Skip sections 1 and 2 entirely.
-3. If the event is in the past, cancelled, or has no other attendees, print \`no-prep-needed\` and exit.
-4. If a prep file already exists for the event's date+slug, overwrite it — the ad-hoc Prep Now action is an explicit refresh request from the user.
-5. If \`gws calendar events get\` exits non-zero, \`/opt/homebrew/bin/gws\` is missing, or the event doesn't exist, print \`gws-event-fetch-failed\` to stdout (not \`no-prep-needed\`) and exit. This distinguishes user-declined-to-prep from infrastructure-broken so the dashboard can render the two outcomes differently.
+2. **SOLO-EVENT SHORT-CIRCUIT.** Before anything else, count the non-self attendees on the fetched event: filter \`attendees\` to those where \`self\` is not true AND \`resource\` is not true AND the email is not the user's own (\`swain@goodparty.org\`). If that count is 0 — the user is the only attendee, or there is no attendees array at all — print the single line \`no-prep-needed\` to stdout and exit immediately. Do NOT call Gmail. Do NOT call ClickUp. Do NOT gather any context. Solo events can never have useful prep.
+3. Run sections 0 (load priorities), 3 (context gathering), 4 (write prep file), and 5 (signal + notification) of the instructions below, but ONLY for that one event. Skip sections 1 and 2 entirely.
+4. If the event is in the past or cancelled, print \`no-prep-needed\` and exit.
+5. If a prep file already exists for the event's date+slug, overwrite it — the ad-hoc Prep Now action is an explicit refresh request from the user.
+6. If \`gws calendar events get\` exits non-zero, \`/opt/homebrew/bin/gws\` is missing, or the event doesn't exist, print \`gws-event-fetch-failed\` to stdout (not \`no-prep-needed\`) and exit. This distinguishes user-declined-to-prep from infrastructure-broken so the dashboard can render the two outcomes differently.
 
 The rest of the prompt follows:
 
