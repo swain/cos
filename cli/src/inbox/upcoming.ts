@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { meetingPrepRuns, signals, type MeetingPrepRun } from "../db.js";
 import { appendGoogleAuthUser, MEETINGS_DIR, slugify } from "../util.js";
 import type { InboxItem } from "./types.js";
+import { reconcilePrepRuns } from "./actions.js";
 
 // Fetch calendar events on the user's primary calendar in the next 8 hours
 // via the `gws` CLI. The CLI is a wrapper around the Google Calendar API
@@ -204,6 +205,10 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
     cache = { at: now, value: [] };
     return [];
   }
+
+  // Settle stale `running` rows whose child died with its parent. Cheap —
+  // one kill(pid, 0) + one existsSync per running row, usually 0-1 rows.
+  reconcilePrepRuns();
 
   const prepIndex = readPrepIndex();
   const pendingEventIds = lookupPendingSignalEventIds();

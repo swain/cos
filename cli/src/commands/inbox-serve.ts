@@ -30,7 +30,7 @@ import {
   peekSession,
   prepMeetingNow,
   promoteIdea,
-  reconcileOrphanedPrepRuns,
+  reconcilePrepRuns,
   retrySession,
   retryWorkItem,
   reviewInPlannotator,
@@ -2545,11 +2545,13 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
 
 export const cmdInboxServe = () => {
   getDb();
-  // Orphaned runs from the previous instance become "failed (server
-  // restarted)" so the dashboard doesn't paint a perma-yellow badge.
-  const orphans = reconcileOrphanedPrepRuns();
-  if (orphans)
-    console.log(chalk.gray(`reconciled ${orphans} orphaned prep run(s)`));
+  // Settle meeting_prep_runs rows still marked `running` from the previous
+  // instance. PID-alive rows (detached collectors that survived the restart)
+  // stay running; PID-dead rows resolve against the filesystem (ready if the
+  // prep file landed, failed otherwise).
+  const reconciled = reconcilePrepRuns();
+  if (reconciled)
+    console.log(chalk.gray(`reconciled ${reconciled} stale prep run(s)`));
   const server = createServer((req, res) => {
     void handle(req, res);
   });
