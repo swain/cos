@@ -38,6 +38,7 @@ import {
   snoozeWorkItem,
   startReviewQueue,
   submitPlanFeedback,
+  submitPrepFeedback,
   suppressSignal,
   viewFailureLog,
   type ActionResult,
@@ -1862,11 +1863,93 @@ const safeReturn = (v: string | undefined): string => {
 const finish = (res: ServerResponse, r: ActionResult, returnTo = "/") =>
   r.ok ? sendRedirect(res, returnTo) : sendText(res, 500, r.message);
 
+// Strips YAML frontmatter off a markdown file and returns it as a parsed
+// key/value map plus the body. The collector emits a flat key: value block
+// between `---` lines; no nesting, no quoting beyond what a URL needs, so a
+// line-by-line split is sufficient. Files without frontmatter (legacy prep)
+// just return an empty map and the full body.
+const parsePrepFrontmatter = (
+  md: string,
+): { meta: Record<string, string>; body: string } => {
+  const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!m) return { meta: {}, body: md };
+  const meta: Record<string, string> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([a-z_][a-z0-9_]*):\s*(.*)$/i.exec(line);
+    if (!kv) continue;
+    meta[kv[1]] = kv[2].trim();
+  }
+  return { meta, body: m[2] };
+};
+
+// Pulls the body of a `## <heading>` section out of a markdown string, up to
+// the next `## ` heading or EOF. Returns null if the heading is absent so
+// callers can distinguish "section empty" from "section missing." Legacy prep
+// files lacking TLDR/Context fall through to the raw-render fallback.
+const extractSection = (md: string, heading: string): string | null => {
+  const re = new RegExp(
+    `^##\\s+${heading.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*$`,
+    "m",
+  );
+  const m = re.exec(md);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const rest = md.slice(start);
+  const next = /^##\s+/m.exec(rest);
+  const end = next ? start + next.index : md.length;
+  return md.slice(start, end).trim();
+};
+
+// Small, opinionated label: "in 11m", "in 1h 5m", "in progress · started 5m
+// ago", "ended 12m ago." Keeps the scale human — we don't want "in 0m" or
+// weirdly precise seconds on a time someone's about to glance at. State
+// (upcoming / live / ended) also drives the pill color so the user can parse
+// the meeting status at a glance without reading the label.
+type MeetingPhase = "upcoming" | "live" | "ended";
+const meetingPhase = (
+  startMs: number,
+  endMs: number,
+  now: number,
+): MeetingPhase => {
+  if (now < startMs) return "upcoming";
+  if (now < endMs) return "live";
+  return "ended";
+};
+
+const formatMinutes = (totalMin: number): string => {
+  if (totalMin < 1) return "<1m";
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
+
+const meetingPhaseLabel = (
+  startMs: number,
+  endMs: number,
+  now: number,
+): string => {
+  const phase = meetingPhase(startMs, endMs, now);
+  if (phase === "upcoming") {
+    const mins = Math.max(1, Math.round((startMs - now) / 60000));
+    return `in ${formatMinutes(mins)}`;
+  }
+  if (phase === "live") {
+    const mins = Math.max(1, Math.round((now - startMs) / 60000));
+    return `in progress · started ${formatMinutes(mins)} ago`;
+  }
+  const mins = Math.max(1, Math.round((now - endMs) / 60000));
+  return `ended ${formatMinutes(mins)} ago`;
+};
+
 // Renders the prep markdown for an event id as a standalone HTML page. The
 // markdown filename (<yyyy-mm-dd>-<slug>.md) is computed from the live
 // UpcomingMeeting row so users can't read arbitrary paths off MEETINGS_DIR
 // by guessing file names.
-const renderPrepPage = (eventId: string): { code: number; html: string } => {
+const renderPrepPage = (
+  eventId: string,
+  opts: { filed?: boolean } = {},
+): { code: number; html: string } => {
   const meeting = findUpcomingMeetingById(eventId);
   if (!meeting) {
     return {
@@ -1882,7 +1965,61 @@ const renderPrepPage = (eventId: string): { code: number; html: string } => {
     };
   }
   const md = readFileSync(path, "utf8");
-  const body = renderPrepMarkdown(md);
+  const { meta, body: afterFrontmatter } = parsePrepFrontmatter(md);
+
+  // Join URL: frontmatter wins (post-redesign collector writes it there),
+  // UpcomingMeeting's hangoutLink is the fallback (legacy file, or the
+  // collector couldn't scrape a link but the calendar has one). Either way
+  // we honor the authuser=1 transform that's already been applied upstream.
+  const joinUrl = meta.join_url || meeting.hangoutLink || "";
+
+  // Frontmatter is the marker of the post-redesign collector output. A legacy
+  // file (pre-wi-79) has no frontmatter but does have a `## Context` H2 —
+  // using section presence alone would half-render the legacy file and lose
+  // the Attendees / Drafted agenda / Notes blocks. Frontmatter keys off the
+  // collector writing it, not the file happening to use a shared heading.
+  const isNewFormat = Object.keys(meta).length > 0;
+  const tldr = isNewFormat ? extractSection(afterFrontmatter, "TLDR") : null;
+  const context = isNewFormat
+    ? extractSection(afterFrontmatter, "Context")
+    : null;
+
+  const phase = meetingPhase(meeting.startMs, meeting.endMs, Date.now());
+  const phaseLabel = meetingPhaseLabel(
+    meeting.startMs,
+    meeting.endMs,
+    Date.now(),
+  );
+
+  const renderSection = (title: string, content: string | null) => {
+    if (content === null) return "";
+    const rendered = content.trim() ? renderPrepMarkdown(content) : "";
+    return `<section class="prep-section">
+<h2 class="prep-section__title">${escapeHtml(title)}</h2>
+<div class="prep-section__body">${rendered || '<p class="prep-section__empty">—</p>'}</div>
+</section>`;
+  };
+
+  const legacyFallback = !isNewFormat
+    ? `<section class="prep-section prep-section--legacy">
+<h2 class="prep-section__title">Prep</h2>
+<div class="prep-section__body">${renderPrepMarkdown(afterFrontmatter)}</div>
+</section>`
+    : "";
+
+  const joinButton = joinUrl
+    ? `<a class="prep-join" href="${escapeHtml(joinUrl)}" target="_blank" rel="noopener">
+<span class="prep-join__label">Join</span>
+<span class="prep-join__arrow" aria-hidden="true">↗</span>
+</a>`
+    : `<span class="prep-join prep-join--disabled" aria-disabled="true" title="No join link in this prep file">
+<span class="prep-join__label">No link</span>
+</span>`;
+
+  const toast = opts.filed
+    ? `<div class="prep-toast" role="status">thanks — filed</div>`
+    : "";
+
   return {
     code: 200,
     html: `<!doctype html>
@@ -1893,67 +2030,22 @@ const renderPrepPage = (eventId: string): { code: number; html: string } => {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${escapeHtml(meeting.summary)} — prep</title>
 <style>${styles}
-/* Prep-view overrides: give the prose a readable measure and editorial
- * heading rhythm. The base styles assume a dashboard density that would
- * feel cramped as long-form content. */
-body { max-width: 720px; padding-top: 40px; padding-bottom: 120px; }
-.prep-view { color: var(--fg-soft); font-size: 15px; line-height: 1.7; }
-.prep-view h1 {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 400;
-  font-size: 40px;
-  line-height: 1.1;
-  color: var(--fg);
-  margin: 0 0 8px;
+/* --- Prep page (redesigned) ---
+ * Editorial column with a sticky Join action in the top-right. The default
+ * dashboard body is denser than long-form content wants, so we widen the
+ * measure a touch and relax line-height.
+ */
+body {
+  max-width: 780px;
+  padding-top: 32px;
+  padding-bottom: 160px;
+  position: relative;
 }
-.prep-view h2 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 22px;
-  color: var(--fg);
-  margin: 28px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--rule);
-}
-.prep-view h3 { font-family: var(--font-display); font-weight: 600; font-size: 17px; color: var(--fg); margin: 22px 0 8px; }
-.prep-view p { margin: 0 0 12px; }
-.prep-view ul, .prep-view ol { margin: 0 0 14px; padding-left: 22px; }
-.prep-view li { margin-bottom: 6px; }
-.prep-view strong { color: var(--fg); }
-.prep-view code {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 1px 5px;
-  background: var(--rule);
-  border-radius: 3px;
-  color: var(--fg);
-}
-.prep-view pre {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  background: var(--rule);
-  padding: 12px 14px;
-  border-radius: 6px;
-  overflow-x: auto;
-  line-height: 1.5;
-}
-.prep-view pre code { padding: 0; background: transparent; font-size: inherit; }
-.prep-view blockquote {
-  margin: 16px 0;
-  padding: 4px 18px;
-  border-left: 3px solid var(--accent);
-  color: var(--fg);
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 16px;
-  line-height: 1.5;
-}
-.prep-view hr { border: 0; border-top: 1px solid var(--rule-strong); margin: 32px 0; }
-.prep-view a { color: var(--accent); }
 .prep-back {
-  display: inline-block;
-  margin-bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 28px;
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.06em;
@@ -1962,19 +2054,279 @@ body { max-width: 720px; padding-top: 40px; padding-bottom: 120px; }
   text-decoration: none;
 }
 .prep-back:hover { color: var(--accent); }
-.prep-meta {
+
+/* Sticky Join: visually anchored to the top-right, rides the viewport on
+ * scroll. The rail is rendered as an absolutely-positioned wrapper so we get
+ * a body-scroll-relative anchor; the inner anchor element is position:sticky
+ * inside it so it trails the viewport. z-index sits above body content but
+ * below the <dialog> backdrop that other routes open. */
+.prep-join-rail {
+  position: absolute;
+  top: 32px;
+  right: 28px;
+  width: 0;
+  height: calc(100% - 32px);
+  pointer-events: none;
+  z-index: 5;
+}
+.prep-join {
+  position: sticky;
+  top: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 10px 20px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--paper);
+  background: var(--accent);
+  border-radius: 999px;
+  text-decoration: none;
+  box-shadow: 0 2px 10px rgba(26, 79, 168, 0.25), 0 1px 0 rgba(0, 0, 0, 0.04);
+  transform: translateX(calc(-100% + 0px));
+  pointer-events: auto;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+@media (prefers-color-scheme: dark) {
+  .prep-join { color: #0b0d13; box-shadow: 0 2px 10px rgba(143, 182, 255, 0.2); }
+}
+.prep-join:hover {
+  transform: translateX(calc(-100% - 2px)) translateY(-1px);
+  box-shadow: 0 4px 16px rgba(26, 79, 168, 0.35);
+}
+.prep-join__arrow { font-size: 14px; line-height: 1; }
+.prep-join--disabled {
+  background: var(--rule);
+  color: var(--muted);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.prep-join--disabled:hover { transform: translateX(calc(-100% + 0px)); box-shadow: none; }
+
+/* Title block — serif nameplate echoes the inbox masthead, but without the
+ * hairline rule so the phase pill reads as part of the same breath. */
+.prep-header {
+  margin: 0 0 36px;
+  max-width: calc(100% - 120px); /* leave room for the sticky Join rail */
+}
+.prep-header__phase {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 14px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.prep-header__phase--live { background: var(--amber-bg); color: var(--amber); }
+.prep-header__phase--ended { background: var(--rule); color: var(--muted); }
+.prep-header__title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 42px;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0;
+}
+.prep-header__meta {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--muted);
+  color: var(--muted-2);
   letter-spacing: 0.02em;
-  margin: 0 0 28px;
+  margin: 14px 0 0;
+}
+
+/* Sections. Each section is a loose editorial block; the heading is a small
+ * uppercase mono label so it never competes with the title, and the body is
+ * set for long-form readability. */
+.prep-section { margin: 0 0 44px; }
+.prep-section__title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.prep-section__body { color: var(--fg-soft); font-size: 15.5px; line-height: 1.65; }
+.prep-section__body h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 20px;
+  color: var(--fg);
+  margin: 22px 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--rule);
+}
+.prep-section__body h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16.5px;
+  color: var(--fg);
+  margin: 18px 0 8px;
+}
+.prep-section__body p { margin: 0 0 12px; }
+.prep-section__body ul, .prep-section__body ol { margin: 0 0 14px; padding-left: 22px; }
+.prep-section__body li { margin-bottom: 8px; }
+.prep-section__body li > p { margin: 0; }
+.prep-section__body li em, .prep-section__body p em {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--muted);
+}
+.prep-section__body strong { color: var(--fg); }
+.prep-section__body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.prep-section__body a:hover { border-bottom-color: var(--accent); }
+.prep-section__body code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 5px;
+  background: var(--rule);
+  border-radius: 3px;
+  color: var(--fg);
+}
+.prep-section__body pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--rule);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.prep-section__body pre code { padding: 0; background: transparent; font-size: inherit; }
+.prep-section__body blockquote {
+  margin: 14px 0;
+  padding: 2px 16px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.prep-section__body hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
+.prep-section__empty {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-2);
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+/* Feedback form — paper panel with a generous textarea. Deliberately low-key:
+ * the primary job here is writing prep, not grading it. */
+.prep-feedback { }
+.prep-feedback__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.prep-feedback__textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.prep-feedback__textarea::placeholder { color: var(--muted-2); }
+.prep-feedback__textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.prep-feedback__row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.prep-feedback__hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.03em;
+}
+
+/* "thanks — filed" toast: shows only on redirect from the POST handler. CSS
+ * animation slides in, holds for a beat, then fades. No JS needed. */
+.prep-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  background: var(--fg);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  animation: prep-toast 4s ease forwards;
+}
+@keyframes prep-toast {
+  0%   { opacity: 0; transform: translate(-50%, -6px); }
+  10%  { opacity: 1; transform: translate(-50%, 0); }
+  80%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
 }
 </style>
 </head>
 <body>
+${toast}
 <a class="prep-back" href="/">← Inbox</a>
-<p class="prep-meta">${escapeHtml(path)}</p>
-<article class="prep-view">${body}</article>
+
+<div class="prep-join-rail">${joinButton}</div>
+
+<header class="prep-header">
+<span class="prep-header__phase prep-header__phase--${phase}">${escapeHtml(phaseLabel)}</span>
+<h1 class="prep-header__title">${escapeHtml(meeting.summary)}</h1>
+<p class="prep-header__meta">${escapeHtml(path)}</p>
+</header>
+
+${renderSection("TLDR", tldr)}
+${renderSection("Context", context)}
+${legacyFallback}
+
+<section class="prep-section prep-feedback">
+<h2 class="prep-section__title">Feedback</h2>
+<form class="prep-feedback__form" method="post" action="/meetings/${encodeURIComponent(eventId)}/prep-feedback">
+<input type="hidden" name="returnTo" value="/meetings/${encodeURIComponent(eventId)}/prep?filed=1">
+<textarea class="prep-feedback__textarea" name="feedback" placeholder="Was this prep useful? What would you change?" required></textarea>
+<div class="prep-feedback__row">
+<span class="prep-feedback__hint">Files a signal for Po's next tick. Cmd+Enter to submit.</span>
+<button class="btn btn--primary" type="submit">Submit</button>
+</div>
+</form>
+</section>
+
+<script>
+// Cmd/Ctrl+Enter submits the feedback form. Small convenience, no deps.
+document.querySelector('.prep-feedback__textarea')?.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    e.target.closest('form').submit();
+  }
+});
+</script>
 </body>
 </html>`,
   };
@@ -2007,7 +2359,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       method === "GET" && path.match(/^\/meetings\/([^/]+)\/prep$/);
     if (prepGet) {
       const eventId = decodeURIComponent(prepGet[1]);
-      const page = renderPrepPage(eventId);
+      const filed = /[?&]filed=1(?:&|$)/.test(url);
+      const page = renderPrepPage(eventId, { filed });
       res.writeHead(page.code, { "Content-Type": "text/html; charset=utf-8" });
       res.end(page.html);
       return;
@@ -2135,6 +2488,11 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       [
         /^\/meetings\/([^/]+)\/prep-now$/,
         (m) => prepMeetingNow(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/meetings\/([^/]+)\/prep-feedback$/,
+        (m) =>
+          submitPrepFeedback(decodeURIComponent(m[1]), form.feedback ?? ""),
       ],
       [
         /^\/meetings\/([^/]+)\/open-prep$/,
