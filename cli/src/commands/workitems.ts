@@ -124,6 +124,25 @@ export const cmdWorkerDone = (
   process.exit(2);
 };
 
+// Mark a work item abandoned. Mirrors the dashboard's Archive/Abandon button
+// (inbox/actions.ts → archiveWorkItem) so inbox-response workers and scripts
+// can kill WIs without shelling through the inbox-serve HTTP API or poking
+// the DB directly. Idempotent on already-abandoned WIs.
+export const cmdWorkItemAbandon = (workItemRef: string) => {
+  const wi = workItems.resolve(workItemRef);
+  if (!wi) {
+    console.error(chalk.red(`work item not found: ${workItemRef}`));
+    process.exit(2);
+  }
+  const display = displayWorkItemId(wi);
+  if (wi.status === "abandoned") {
+    console.log(chalk.gray("already abandoned"), display);
+    return;
+  }
+  workItems.update(wi.id, { status: "abandoned", session_id: null });
+  console.log(chalk.gray("abandoned"), display);
+};
+
 const findRepoLocalPath = (remoteName: string): string | null => {
   const reposBase = join(HOME, "Repos");
   const shortName = shortRepoName(remoteName);

@@ -12,6 +12,7 @@ import {
   cmdWorkerPrimaryWorktree,
   cmdWorkerDisplayId,
   cmdWorkerWindowName,
+  cmdWorkItemAbandon,
   cmdWorkItemSetDeps,
 } from "./commands/workitems.js";
 import {
@@ -249,6 +250,13 @@ program
   .description("Mark a plan superseded (dashboard Dismiss / doctor age-out)")
   .option("--note <note>", "short reason (appended to plan markdown)")
   .action((id, opts) => cmdPlanSupersede(id, opts.note));
+
+program
+  .command("wi-abandon <workItemRef>")
+  .description(
+    "Mark a work item abandoned (CLI equivalent of the dashboard Archive/Abandon button)",
+  )
+  .action((ref) => cmdWorkItemAbandon(ref));
 
 program
   .command("wi-set-deps <workItemId>")

@@ -11,6 +11,7 @@ import {
   buildModeAddendum,
   checkPendingPlanBlocksDispatch,
   cmdWorkerDone,
+  cmdWorkItemAbandon,
 } from "./workitems.js";
 import { workItems, sessions, plans, getDb } from "../db.js";
 
@@ -124,6 +125,33 @@ describe("cmdWorkerDone --failed", () => {
     const wi = workItems.get(wiId)!;
     expect(wi.status).toBe("pr-open");
     expect(wi.session_id).toBeNull();
+  });
+});
+
+describe("cmdWorkItemAbandon", () => {
+  it("marks a queued WI abandoned and clears session_id", () => {
+    const wiId = insertWi({ status: "queued" });
+    const sessId = insertSession(wiId);
+    workItems.update(wiId, { session_id: sessId });
+
+    cmdWorkItemAbandon(wiId);
+
+    const wi = workItems.get(wiId)!;
+    expect(wi.status).toBe("abandoned");
+    expect(wi.session_id).toBeNull();
+  });
+
+  it("is idempotent on an already-abandoned WI", () => {
+    const wiId = insertWi({ status: "abandoned" });
+    cmdWorkItemAbandon(wiId);
+    expect(workItems.get(wiId)!.status).toBe("abandoned");
+  });
+
+  it("resolves by num reference as well as ulid", () => {
+    const wiId = insertWi({ status: "queued" });
+    const wi = workItems.get(wiId)!;
+    cmdWorkItemAbandon(String(wi.num));
+    expect(workItems.get(wiId)!.status).toBe("abandoned");
   });
 });
 
