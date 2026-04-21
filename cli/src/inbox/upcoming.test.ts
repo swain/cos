@@ -252,6 +252,19 @@ describe("upcomingToItem — phase + meta plumbing", () => {
     expect(item.meta?.prepPath).toBe(m.prepPath);
     expect(String(item.meta?.relative)).toMatch(/^ended /);
   });
+
+  it("solo meeting surfaces attendeeLabel='solo' and prepStatus='solo' in meta", () => {
+    const m = mkMeeting({
+      attendeeCount: 0,
+      prepStatus: "solo",
+      prepPath: null,
+    });
+    const item = upcomingToItem(m, m.startMs - 5 * 60_000);
+    expect(item.meta?.prepStatus).toBe("solo");
+    expect(item.meta?.attendees).toBe(0);
+    expect(item.body).toContain("solo");
+    expect(item.body).not.toContain("0 attendees");
+  });
 });
 
 describe("upcoming.getUpcomingMeetings prep state derivation", () => {

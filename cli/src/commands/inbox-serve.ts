@@ -1365,7 +1365,8 @@ type PrepVariant =
   | "prep-running"
   | "prep-failed"
   | "no-prep-needed"
-  | "no-prep";
+  | "no-prep"
+  | "solo";
 
 const PREP_VARIANT_UI: Record<
   PrepVariant,
@@ -1401,6 +1402,12 @@ const PREP_VARIANT_UI: Record<
     accent: "card--upcoming",
     icon: "",
   },
+  solo: {
+    badgeLabel: "solo",
+    badgeCls: "prep-badge prep-badge--skipped",
+    accent: "card--upcoming-skipped",
+    icon: "",
+  },
 };
 
 const coercePrepVariant = (v: string): PrepVariant => {
@@ -1410,6 +1417,7 @@ const coercePrepVariant = (v: string): PrepVariant => {
     case "prep-failed":
     case "no-prep-needed":
     case "no-prep":
+    case "solo":
       return v;
     // Legacy alias from before wi-63 — collapse to the new running state.
     case "prep-pending":
@@ -1421,11 +1429,12 @@ const coercePrepVariant = (v: string): PrepVariant => {
 
 // Builds the one-primary-action CTA for the row. The glanceable widget
 // shows exactly one CTA per state:
-//   - ready         → Open prep (new tab, rendered markdown)
-//   - running       → disabled "Prep running…" with spinner
-//   - failed        → Retry (POST prep-now)
+//   - ready          → Open prep (new tab, rendered markdown)
+//   - running        → disabled "Prep running…" with spinner
+//   - failed         → Retry (POST prep-now)
 //   - no-prep-needed → none (labeled "Solo meeting" inline instead)
-//   - no-prep       → Prep now (POST prep-now)
+//   - no-prep        → Prep now (POST prep-now)
+//   - solo           → none (prep can never succeed for a 0-attendee event)
 const renderPrepPrimary = (
   variant: PrepVariant,
   eventId: string,
@@ -1440,6 +1449,8 @@ const renderPrepPrimary = (
     case "prep-failed":
       return `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">Retry</button></form>`;
     case "no-prep-needed":
+      return "";
+    case "solo":
       return "";
     case "no-prep":
       return `<form method="post" action="/meetings/${id}/prep-now">${hiddenReturn(returnTo)}<button class="btn btn--primary">Prep now</button></form>`;
@@ -1492,7 +1503,11 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
     ? `<details class="overflow"><summary title="more">⋯</summary><div class="overflow__menu">${overflowItems.join("")}</div></details>`
     : "";
   const attendeeLabel =
-    attendees === 1 ? "1 attendee" : `${attendees} attendees`;
+    attendees === 0
+      ? "solo"
+      : attendees === 1
+        ? "1 attendee"
+        : `${attendees} attendees`;
 
   const errorLine =
     variant === "prep-failed" && prepError
@@ -1501,7 +1516,9 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
   const skippedNote =
     variant === "no-prep-needed"
       ? `<div class="card__prep-skipped-note">Solo meeting — no prep generated.</div>`
-      : "";
+      : variant === "solo"
+        ? `<div class="card__prep-skipped-note">Solo meeting — no prep needed.</div>`
+        : "";
 
   return `
 <article class="card ${ui.accent}" id="row-${escapeHtml(item.key)}">

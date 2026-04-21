@@ -465,6 +465,12 @@ export const prepMeetingNow = async (
   }
 
   const upcoming = findUpcomingMeetingById(eventId);
+  // Solo events can never yield useful prep. Short-circuit before spawning
+  // the collector so a stray Prep Now / Retry click doesn't pay the claude
+  // cold-start just to print `no-prep-needed`.
+  if (upcoming && upcoming.prepStatus === "solo") {
+    return { ok: true, message: `solo meeting — no prep needed` };
+  }
   const slug = upcoming?.prepSlug ?? eventId;
   const runId = `mpr-${ulid()}`;
 

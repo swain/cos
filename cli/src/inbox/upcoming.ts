@@ -38,7 +38,8 @@ export type PrepStatus =
   | "prep-running"
   | "prep-failed"
   | "no-prep-needed"
-  | "no-prep";
+  | "no-prep"
+  | "solo";
 
 export type UpcomingMeeting = {
   id: string;
@@ -52,6 +53,14 @@ export type UpcomingMeeting = {
   prepSlug: string;
   prepError: string | null;
 };
+
+// The user's calendar identity. Used to recognize the "me" attendee when
+// Google Calendar happens not to set `self: true` on the user's own row
+// (seen on events the user created with themselves as organizer). Env
+// override exists so tests and alternate users aren't pinned to this value.
+export const USER_EMAIL = (
+  process.env.COS_USER_EMAIL || "swain@goodparty.org"
+).toLowerCase();
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const LOOKAHEAD_MS = 8 * 60 * 60 * 1000;
@@ -75,12 +84,20 @@ const isRealMeeting = (e: GwsEvent): boolean => {
   return true;
 };
 
-const countAttendees = (e: GwsEvent): number => {
+// Counts attendees that aren't the user themselves. We check both the Google
+// `self` flag and an explicit email match against USER_EMAIL because Google
+// Calendar sometimes omits `self: true` on the user's own row for events they
+// created as organizer — leaving a bare `self`-only filter to over-count the
+// meeting as a 1-attendee "real" meeting when it's actually solo.
+const countNonSelfAttendees = (e: GwsEvent): number => {
   const list = e.attendees ?? [];
-  const counted = list.filter(
-    (a) => !a.self && !a.resource && a.responseStatus !== "declined",
-  );
-  return counted.length;
+  return list.filter((a) => {
+    if (a.self) return false;
+    if (a.resource) return false;
+    if (a.email && a.email.toLowerCase() === USER_EMAIL) return false;
+    if (a.responseStatus === "declined") return false;
+    return true;
+  }).length;
 };
 
 // Mirrors the slug convention in prompts/calendar-collect.md so the filename
@@ -237,20 +254,29 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
     const hasFile = prepIndex.byExact.has(slug);
     const prepPath = hasFile ? `${MEETINGS_DIR}/${slug}.md` : null;
     const run = runsByEvent.get(e.id) ?? null;
+    const nonSelfAttendees = countNonSelfAttendees(e);
+    const isSolo = nonSelfAttendees === 0;
 
     // Decide prep status with this precedence:
-    //   1. File on disk         → prep-ready (even if a failed run exists —
-    //                             the successful output is what matters)
-    //   2. Active run            → prep-running
-    //   3. Fresh no-prep-needed → surfaced so the user knows why
-    //   4. Fresh failure        → surfaced so the user can retry
-    //   5. Pending signal       → prep-running (legacy, set by the 15-45min
-    //                             ambient collector)
-    //   6. Otherwise            → no-prep
+    //   1. File on disk           → prep-ready (even if a failed run exists —
+    //                               the successful output is what matters;
+    //                               also the edge case where a solo meeting
+    //                               has a manually-written prep file)
+    //   2. Solo event             → solo (permanent, no retry affordance;
+    //                               drops any stale prep-failed row that
+    //                               never should've been generated)
+    //   3. Active run             → prep-running
+    //   4. Fresh no-prep-needed   → surfaced so the user knows why
+    //   5. Fresh failure          → surfaced so the user can retry
+    //   6. Pending signal         → prep-running (legacy, set by the 15-45min
+    //                               ambient collector)
+    //   7. Otherwise              → no-prep
     let prepStatus: PrepStatus;
     let prepError: string | null = null;
     if (hasFile) {
       prepStatus = "prep-ready";
+    } else if (isSolo) {
+      prepStatus = "solo";
     } else if (run && run.status === "running") {
       prepStatus = "prep-running";
     } else if (
@@ -277,7 +303,7 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
       summary: e.summary ?? "(untitled)",
       startMs,
       endMs,
-      attendeeCount: countAttendees(e),
+      attendeeCount: nonSelfAttendees,
       hangoutLink: e.hangoutLink ? appendGoogleAuthUser(e.hangoutLink) : null,
       prepStatus,
       prepPath,
@@ -371,7 +397,11 @@ export const upcomingToItem = (
   const when = formatMeetingWhen(m.startMs, m.endMs, nowMs);
   const abs = formatAbsoluteLocal(m.startMs);
   const attendeeLabel =
-    m.attendeeCount === 1 ? "1 attendee" : `${m.attendeeCount} attendees`;
+    m.attendeeCount === 0
+      ? "solo"
+      : m.attendeeCount === 1
+        ? "1 attendee"
+        : `${m.attendeeCount} attendees`;
   const body = `${when.label} · ${abs} · ${attendeeLabel}`;
   return {
     key: `upcoming:${m.id}`,
