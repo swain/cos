@@ -101,7 +101,7 @@ Use a bash heredoc — do NOT use the Write/Edit tool, the harness blocks writes
 The prep file has two rules that matter to downstream tooling:
 
 1. **YAML frontmatter** at the very top, fenced by `---` lines. The dashboard renderer parses this.
-2. **Exactly two body sections**: `## TLDR` (3–5 bullets) and `## Context` (2–5 items). No other sections. No attendee roster. No drafted-agenda prose. No "last meeting" subsection headers — fold that into Context as one line if it's relevant.
+2. **Exactly two body sections**: `## TLDR` (up to 4 bullets) and `## Context` (2–5 items). No other sections. No attendee roster. No drafted-agenda prose. No "last meeting" subsection headers — fold that into Context as one line if it's relevant.
 
 ```bash
 mkdir -p ~/.claude/cos/meetings
@@ -117,8 +117,9 @@ event_page: <authuser-annotated htmlLink>
 
 ## TLDR
 
-- <3-5 bullets total. Concrete action-oriented items: what the user should try to do or decide. No filler, no preamble, no "this meeting is about..." summaries.>
-- <One of the bullets must cross-reference `~/.claude/cos/priorities.md`: name the specific priority this meeting advances, or if none of the priorities match, say "Unrelated to current priorities — <duration>min check-in; optional participation." Be plain, not hedged.>
+- <Up to 4 bullets total. Each bullet is ONE sentence, ≤15 words. Concrete action-oriented items: what the user should try to do or decide. No filler, no preamble, no "this meeting is about..." summaries.>
+- <First bullet is the single most important thing to do or decide in this meeting. If the TLDR were cut to one bullet, this is the one that survives.>
+- <One bullet cross-references `~/.claude/cos/priorities.md`: "Advances priority: <name>." Or, if none match: "Unrelated to current priorities." One sentence, not a paragraph.>
 
 ## Context
 
@@ -131,10 +132,32 @@ Replace `<...>` placeholders with real values. Keep the frontmatter keys exact �
 
 ### TLDR writing discipline
 
-- 3–5 bullets. Not 6. Not 2.
+- **Max 4 bullets.** Not 5, not 6. Fewer is fine — 2 sharp bullets beat 4 padded ones.
+- **One sentence per bullet. ≤15 words.** Count them. If a thought won't compress to 15 words, cut the weakest bullet instead of letting this one sprawl. Two sentences in a bullet is a bug, not a style choice.
+- **First bullet = the single most important thing to do or decide.** If the TLDR were cut to one bullet, this would be it. Order matters; the user reads top-down.
 - Action verbs. "Confirm X." "Ask Y whether Z." "Push back on W." "Decide whether to K."
-- The priority cross-reference is one of the bullets, not an extra preamble line. Phrase it as a bullet too.
+- **Priority cross-reference = one bullet.** Phrase as "Advances priority: <name>." or "Unrelated to current priorities." Not a paragraph about the priority.
+- **No process bullets** ("don't default to status update", "come in with one real ask") unless that IS the single highest-leverage move in the meeting. The user knows how to run a 1:1.
+- **No cadence/calendar-history bullets** ("first bi-weekly post-cadence-drop", "cadence just changed"). Those belong in `## Context` if anywhere.
 - If you would write a sentence containing "This meeting is…" or "The purpose is…", delete it and write what the user should DO instead.
+
+#### Bad vs good (voice + compression anchors)
+
+Bad (current-style sprawl, multi-sentence, process-explanation):
+
+> - First bi-weekly 1:1 post-cadence-drop — treat this as a test of whether less-frequent-but-more-substantive reclaims value. Come in with one real ask; do **not** default to a status update.
+
+Good (one sentence, ≤15 words, the action is the sentence):
+
+> - One real ask, not status update: less-frequent/more-substantive 1:1 is on trial.
+
+Bad (paragraph of recommendation + rationale + exclusions):
+
+> - Raise one Sam-owned structural call. Recommend **Win pod leadership vacuum** (Tomer acting, doesn't want it long-term, no plan). Ask: "what's the path to filling this, and when?" Lowest-friction of the three structural threads you'd make differently — Collin's silo and Platform-pod-existence are higher-heat and not for the inaugural bi-weekly.
+
+Good (the ask itself, nothing else; rationale lives in your head or in Context):
+
+> - Raise Win-pod leadership: path + timeline to fill Tomer's acting role?
 
 ### Context writing discipline
 
