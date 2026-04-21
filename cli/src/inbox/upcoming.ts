@@ -239,7 +239,7 @@ export const getUpcomingMeetings = (): UpcomingMeeting[] => {
     //   2. Active run            → prep-running
     //   3. Fresh no-prep-needed → surfaced so the user knows why
     //   4. Fresh failure        → surfaced so the user can retry
-    //   5. Pending signal       → prep-running (legacy, set by the 20-30min
+    //   5. Pending signal       → prep-running (legacy, set by the 15-45min
     //                             ambient collector)
     //   6. Otherwise            → no-prep
     let prepStatus: PrepStatus;

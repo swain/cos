@@ -11,12 +11,12 @@ export type CalendarCollectorResult = {
 };
 
 // Preamble injected before the prompt when the caller wants prep for a single
-// named event rather than the default 20-30min window. Shipped with the prompt
+// named event rather than the default 15-45min window. Shipped with the prompt
 // itself so the subprocess sees it as one contiguous instruction block.
 const SINGLE_EVENT_PREAMBLE = (eventId: string) => `
 SINGLE-EVENT OVERRIDE — read this before anything else.
 
-You are being invoked to prepare exactly one event. Do NOT scan the next 2h window. Do NOT apply the 20–30 minute filter. Instead:
+You are being invoked to prepare exactly one event. Do NOT scan the next 2h window. Do NOT apply the 15–45 minute filter. Instead:
 
 1. Fetch the event:
    /opt/homebrew/bin/gws calendar events get --params '{"calendarId":"primary","eventId":"${eventId}"}' --format json 2>/dev/null

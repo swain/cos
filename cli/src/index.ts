@@ -327,7 +327,7 @@ program
   .option("--timeout-ms <n>", "subprocess timeout in milliseconds", "180000")
   .option(
     "--event-id <id>",
-    "prepare a single named event (bypasses the default 20–30 min window filter)",
+    "prepare a single named event (bypasses the default 15–45 min window filter)",
   )
   .action((opts) =>
     cmdCollectCalendar({
