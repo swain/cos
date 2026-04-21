@@ -1107,10 +1107,13 @@ const renderReviewActions = (item: InboxItem, returnTo: string): string => {
   const rtn = hiddenReturn(returnTo);
   switch (item.kind) {
     case "plan-review": {
-      // "Review plan" spawns plannotator-annotate on the plan markdown in a
-      // new Terminal; on exit the wrapper prompts approve/feedback/skip and
-      // persists the decision back to the plans row. Approve / Dismiss on
-      // the row itself are shortcuts for users confident without reading.
+      // "Review plan" spawns `plannotator annotate` headlessly. plannotator
+      // starts its own local HTTP server and opens the plan in a new browser
+      // tab; when the reviewer clicks "Send feedback" we auto-map the result
+      // back to the plans row — empty/sentinel body → cos plan-approve,
+      // annotations → cos plan-resubmit --feedback <body>. No Terminal window
+      // appears. Approve / Dismiss on the row itself remain shortcuts for
+      // users confident without reading.
       const review = `<form method="post" action="/plans/${id}/review-plannotator">${rtn}<button class="btn btn--primary">Review plan</button></form>`;
       const approve = btn(
         `/plans/${id}/approve`,
