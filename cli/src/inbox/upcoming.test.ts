@@ -7,7 +7,8 @@ const tmp = mkdtempSync(join(tmpdir(), "cos-upcoming-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
 const { getDb, meetingPrepRuns } = await import("../db.js");
-const { reconcileOrphanedPrepRuns } = await import("./actions.js");
+const { reconcileOrphanedPrepRuns, classifyCollectorOutput } =
+  await import("./actions.js");
 
 afterAll(() => {
   getDb().close();
@@ -60,6 +61,39 @@ describe("meetingPrepRuns", () => {
     const r = meetingPrepRuns.latestForEvent("evt-3")!;
     expect(r.status).toBe("failed");
     expect(r.error).toMatch(/orphaned/);
+  });
+});
+
+describe("classifyCollectorOutput", () => {
+  it("returns gws-fetch-failed when the explicit sentinel is present", () => {
+    const r = classifyCollectorOutput("doing work…\ngws-event-fetch-failed\n");
+    expect(r.kind).toBe("gws-fetch-failed");
+    if (r.kind === "gws-fetch-failed") expect(r.reason).toMatch(/gws/);
+  });
+
+  it("returns gws-fetch-failed when the base prompt's gws-unavailable sentinel is present", () => {
+    const r = classifyCollectorOutput("gws-unavailable\n");
+    expect(r.kind).toBe("gws-fetch-failed");
+    if (r.kind === "gws-fetch-failed") expect(r.reason).toMatch(/gws/i);
+  });
+
+  it("prefers gws-fetch-failed over no-prep-needed when both appear", () => {
+    const r = classifyCollectorOutput(
+      "gws-event-fetch-failed\nno-prep-needed\n",
+    );
+    expect(r.kind).toBe("gws-fetch-failed");
+  });
+
+  it("returns no-prep-needed on the no-prep-needed sentinel alone", () => {
+    expect(classifyCollectorOutput("no-prep-needed\n").kind).toBe(
+      "no-prep-needed",
+    );
+  });
+
+  it("returns ready when no sentinel is present", () => {
+    expect(classifyCollectorOutput("wrote prep file for evt-123\n").kind).toBe(
+      "ready",
+    );
   });
 });
 
