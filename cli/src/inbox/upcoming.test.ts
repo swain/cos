@@ -9,6 +9,7 @@ process.env.COS_DB_PATH = join(tmp, "fleet.db");
 const { getDb, meetingPrepRuns } = await import("../db.js");
 const { reconcileOrphanedPrepRuns, classifyCollectorOutput } =
   await import("./actions.js");
+const { formatMeetingWhen, upcomingToItem } = await import("./upcoming.js");
 
 afterAll(() => {
   getDb().close();
@@ -94,6 +95,89 @@ describe("classifyCollectorOutput", () => {
     expect(classifyCollectorOutput("wrote prep file for evt-123\n").kind).toBe(
       "ready",
     );
+  });
+});
+
+describe("formatMeetingWhen — before-start / in-progress / just-ended phases", () => {
+  const start = Date.UTC(2026, 3, 21, 14, 0, 0);
+  const end = start + 30 * 60_000;
+
+  it("before-start uses the existing in-X relative phrasing", () => {
+    const now = start - 12 * 60_000;
+    const r = formatMeetingWhen(start, end, now);
+    expect(r.phase).toBe("before-start");
+    expect(r.label).toBe("in 12 min");
+  });
+
+  it("at start flips to in-progress with a live prefix", () => {
+    const now = start + 5 * 60_000;
+    const r = formatMeetingWhen(start, end, now);
+    expect(r.phase).toBe("in-progress");
+    expect(r.label).toBe("live · started 5m ago");
+  });
+
+  it("in-progress minimum is 1m so rows don't show '0m ago' at the exact flip", () => {
+    const r = formatMeetingWhen(start, end, start);
+    expect(r.phase).toBe("in-progress");
+    expect(r.label).toBe("live · started 1m ago");
+  });
+
+  it("after end uses 'ended Xm ago' with muted framing", () => {
+    const now = end + 7 * 60_000;
+    const r = formatMeetingWhen(start, end, now);
+    expect(r.phase).toBe("just-ended");
+    expect(r.label).toBe("ended 7m ago");
+  });
+
+  it("in-progress formats long meetings with h+m", () => {
+    const longEnd = start + 90 * 60_000;
+    const now = start + 75 * 60_000;
+    const r = formatMeetingWhen(start, longEnd, now);
+    expect(r.phase).toBe("in-progress");
+    expect(r.label).toBe("live · started 1h 15m ago");
+  });
+});
+
+describe("upcomingToItem — phase + meta plumbing", () => {
+  const mkMeeting = (
+    overrides: Partial<Parameters<typeof upcomingToItem>[0]> = {},
+  ) => ({
+    id: "evt-1",
+    summary: "1:1 with Kiley",
+    startMs: Date.UTC(2026, 3, 21, 14, 0, 0),
+    endMs: Date.UTC(2026, 3, 21, 14, 30, 0),
+    attendeeCount: 1,
+    hangoutLink: "https://meet.google.com/abc-def-ghi",
+    prepStatus: "prep-ready" as const,
+    prepPath: "/tmp/prep.md",
+    prepSlug: "2026-04-21-1-1-with-kiley",
+    prepError: null,
+    ...overrides,
+  });
+
+  it("before-start carries phase=before-start and the in-X label", () => {
+    const m = mkMeeting();
+    const item = upcomingToItem(m, m.startMs - 10 * 60_000);
+    expect(item.meta?.phase).toBe("before-start");
+    expect(item.meta?.relative).toBe("in 10 min");
+  });
+
+  it("in-progress retains the hangoutLink and prepPath so join + open prep stay reachable", () => {
+    const m = mkMeeting();
+    const item = upcomingToItem(m, m.startMs + 5 * 60_000);
+    expect(item.meta?.phase).toBe("in-progress");
+    expect(item.meta?.hangoutLink).toBe(m.hangoutLink);
+    expect(item.meta?.prepPath).toBe(m.prepPath);
+    expect(item.meta?.prepStatus).toBe("prep-ready");
+  });
+
+  it("just-ended retains the hangoutLink and prepPath", () => {
+    const m = mkMeeting();
+    const item = upcomingToItem(m, m.endMs + 7 * 60_000);
+    expect(item.meta?.phase).toBe("just-ended");
+    expect(item.meta?.hangoutLink).toBe(m.hangoutLink);
+    expect(item.meta?.prepPath).toBe(m.prepPath);
+    expect(String(item.meta?.relative)).toMatch(/^ended /);
   });
 });
 

@@ -848,6 +848,23 @@ body {
   letter-spacing: 0.02em;
   margin-right: 10px;
 }
+.card__when--live { color: var(--red); }
+.card__when--live::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+  margin-right: 6px;
+  vertical-align: 1px;
+  animation: cos-live-pulse 1.4s ease-in-out infinite;
+}
+.card__when--ended { color: var(--muted); font-weight: 500; }
+@keyframes cos-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 .prep-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -1433,6 +1450,13 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
   const relative = String(meta.relative ?? "");
   const absolute = String(meta.absolute ?? "");
   const attendees = Number(meta.attendees ?? 0);
+  const phase = String(meta.phase ?? "before-start");
+  const whenCls =
+    phase === "in-progress"
+      ? "card__when card__when--live"
+      : phase === "just-ended"
+        ? "card__when card__when--ended"
+        : "card__when";
   const variant = coercePrepVariant(String(meta.prepStatus ?? "no-prep"));
   const prepPath =
     meta.prepPath === null || meta.prepPath === undefined
@@ -1482,7 +1506,7 @@ const renderUpcomingCard = (item: InboxItem, returnTo: string): string => {
 <article class="card ${ui.accent}" id="row-${escapeHtml(item.key)}">
   <div class="card__head">
     <div class="card__body">
-      <div class="card__subject"><span class="card__when">${escapeHtml(relative)}</span>${escapeHtml(item.subject)}</div>
+      <div class="card__subject"><span class="${whenCls}">${escapeHtml(relative)}</span>${escapeHtml(item.subject)}</div>
       <div class="card__meta">
         <span class="${ui.badgeCls}">${ui.icon}${escapeHtml(ui.badgeLabel)}</span>
         <span>${escapeHtml(absolute)}</span>
