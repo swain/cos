@@ -70,6 +70,9 @@ const ageMinutes = (iso: string): number =>
 const isGoodpartyPr = (url: string): boolean =>
   /github\.com\/thegoodparty\//.test(url);
 
+const isDocOutput = (url: string): boolean =>
+  url.startsWith("file://") && url.toLowerCase().endsWith(".md");
+
 const reposLabel = (repos: string[]): string =>
   repos.length ? repos.join(", ") : "—";
 
@@ -253,6 +256,30 @@ const reviewItems = (): InboxItem[] => {
       related_ids: [gpPr, ...wi.pr_urls.filter((u) => u !== gpPr)],
       created_at: wi.updated_at,
       meta: { priority: wi.priority, repos: reposLabel(wi.repos), pr: gpPr },
+    });
+  }
+
+  // Doc-review: WIs in pr-open whose "PR urls" are actually local markdown
+  // files (a worker-generated review doc). These never land on GitHub, so the
+  // pr-review loop skips them. Surface them here with an inline markdown
+  // renderer + reply form.
+  for (const wi of workItems.list({ status: "pr-open" })) {
+    if (wi.inbox_acked_at) continue;
+    if (!wi.pr_urls.length) continue;
+    if (!wi.pr_urls.every(isDocOutput)) continue;
+    const doc = wi.pr_urls[0];
+    items.push({
+      key: `doc-review:${wi.id}`,
+      kind: "doc-review",
+      id: wi.id,
+      displayLabel: displayWorkItemId(wi),
+      section: "review",
+      urgency: "urgent",
+      subject: wi.title,
+      body: trimBody(`Doc awaiting your review — ${doc}`),
+      related_ids: wi.pr_urls,
+      created_at: wi.updated_at,
+      meta: { priority: wi.priority, repos: reposLabel(wi.repos), doc },
     });
   }
 

@@ -37,6 +37,7 @@ import {
   reviewPlanInPlannotator,
   snoozeWorkItem,
   startReviewQueue,
+  submitDocReview,
   submitPlanFeedback,
   submitPrepFeedback,
   suppressSignal,
@@ -759,6 +760,134 @@ body {
 }
 .nl-form button:hover { background: var(--accent-bg); }
 
+/* ----- Doc-review disclosure (worker-output markdown, reply + ack inline) ----- */
+.doc-review {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: var(--paper);
+  border: 1px dashed var(--rule-strong);
+  border-radius: 6px;
+}
+.doc-review > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+.doc-review > summary::-webkit-details-marker { display: none; }
+.doc-review > summary::before {
+  content: "▸";
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.12s ease-out;
+}
+.doc-review[open] > summary::before { transform: rotate(90deg); }
+.doc-review__label {
+  color: var(--accent);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.doc-review__path {
+  color: var(--muted-2);
+  word-break: break-all;
+  font-size: 10.5px;
+}
+.doc-review__body {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  color: var(--fg-soft);
+  font-size: 14px;
+  line-height: 1.6;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.doc-review__body h1,
+.doc-review__body h2,
+.doc-review__body h3,
+.doc-review__body h4 {
+  font-family: var(--font-display);
+  color: var(--fg);
+  margin: 16px 0 8px;
+}
+.doc-review__body h1 { font-size: 22px; }
+.doc-review__body h2 { font-size: 18px; border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
+.doc-review__body h3 { font-size: 15.5px; }
+.doc-review__body p { margin: 0 0 10px; }
+.doc-review__body ul, .doc-review__body ol { margin: 0 0 12px; padding-left: 20px; }
+.doc-review__body li { margin-bottom: 6px; }
+.doc-review__body code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  background: var(--rule);
+  border-radius: 3px;
+  color: var(--fg);
+}
+.doc-review__body pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--rule);
+  padding: 10px 12px;
+  border-radius: 5px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.doc-review__body pre code { padding: 0; background: transparent; font-size: inherit; }
+.doc-review__body blockquote {
+  margin: 10px 0;
+  padding: 2px 12px;
+  border-left: 2px solid var(--accent);
+  color: var(--fg);
+  font-style: italic;
+}
+.doc-review__body a { color: var(--accent); }
+.doc-review__body hr { border: 0; border-top: 1px solid var(--rule); margin: 16px 0; }
+.doc-review__missing {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--red);
+}
+.doc-review__reply {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.doc-review__reply textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.doc-review__reply textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.doc-review__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.doc-review__ack {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ----- Idea details disclosure ----- */
 .idea__rationale {
   margin-top: 10px;
@@ -1104,6 +1233,7 @@ const btn = (
 
 const cardAccentClass = (item: InboxItem): string => {
   if (item.kind === "pr-review") return "card--pr";
+  if (item.kind === "doc-review") return "card--pr";
   if (item.kind === "plan-review") return "card--pr";
   if (item.kind === "blocked-item") return "card--blocked";
   if (item.kind === "work-item") return "card--approval";
@@ -1166,6 +1296,11 @@ const renderReviewActions = (item: InboxItem, returnTo: string): string => {
         )
       );
     }
+    case "doc-review":
+      // All doc-review actions (expand, reply, ack) live inside the card body
+      // so they sit next to the rendered markdown. The top-of-card actions
+      // slot stays empty — nothing to click here.
+      return "";
     case "blocked-item":
       return (
         btn(`/work-items/${id}/retry`, "retry", returnTo, "btn btn--primary") +
@@ -1256,6 +1391,43 @@ const renderIdeaBody = (item: InboxItem): string => {
   return `${rationale}<div class="idea__meta">${meta.join("")}</div>`;
 };
 
+// Doc-review disclosure: worker dropped a markdown file as output (file://
+// pr_url). Embed the rendered doc inline behind a `<details>` so the user can
+// read and reply without leaving the dashboard. Two sibling forms so "Ack
+// only" doesn't have to share a textarea with "Reply + Ack".
+const renderDocReviewDisclosure = (
+  item: InboxItem,
+  returnTo: string,
+): string => {
+  const id = encodeURIComponent(item.id);
+  const rtn = hiddenReturn(returnTo);
+  const docUrl = item.related_ids.find((u) => u.startsWith("file://")) ?? "";
+  if (!docUrl) return "";
+  const docPath = docUrl.replace(/^file:\/\//, "");
+  let docHtml = "";
+  try {
+    docHtml = renderPrepMarkdown(readFileSync(docPath, "utf8"));
+  } catch (e: any) {
+    docHtml = `<p class="doc-review__missing">Could not read <code>${escapeHtml(docPath)}</code>: ${escapeHtml(e?.message ?? "unknown error")}</p>`;
+  }
+  return `
+<details class="doc-review">
+  <summary><span class="doc-review__label">Open doc</span><span class="doc-review__path">${escapeHtml(docPath)}</span></summary>
+  <div class="doc-review__body">${docHtml}</div>
+  <form class="doc-review__reply" method="post" action="/work-items/${id}/doc-review">
+    ${rtn}
+    <textarea name="reply" placeholder="Reply (appended to the doc as a timestamped '## Review feedback' block)."></textarea>
+    <div class="doc-review__actions">
+      <button class="btn btn--primary" type="submit">Reply + Ack</button>
+    </div>
+  </form>
+  <form class="doc-review__ack" method="post" action="/work-items/${id}/doc-review">
+    ${rtn}
+    <button class="btn btn--muted" type="submit">Ack only (leave doc untouched)</button>
+  </form>
+</details>`;
+};
+
 const renderCard = (
   item: InboxItem,
   returnTo: string,
@@ -1273,6 +1445,7 @@ const renderCard = (
         .join("")
     : "";
   const isIdea = item.kind === "idea";
+  const isDocReview = item.kind === "doc-review";
   const bodyHtml = isIdea
     ? renderIdeaBody(item)
     : item.body
@@ -1284,8 +1457,12 @@ const renderCard = (
       : renderFyiActions(item, returnTo);
 
   const idLabel = item.displayLabel ?? item.id;
+  const docReviewBlock =
+    variant === "review" && isDocReview
+      ? renderDocReviewDisclosure(item, returnTo)
+      : "";
   const nlForm =
-    variant === "review"
+    variant === "review" && !isDocReview
       ? `<form class="nl-form" method="post" action="/inbox/rows/${encodeURIComponent(item.key)}/respond">
           ${hiddenReturn(returnTo)}
           <input type="text" name="text" placeholder="reply in plain English — enqueues a work item for Po">
@@ -1309,6 +1486,7 @@ const renderCard = (
     </div>
     <div class="actions">${actions}</div>
   </div>
+  ${docReviewBlock}
   ${nlForm}
 </article>`;
 };
@@ -2442,6 +2620,10 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       [
         /^\/work-items\/([^/]+)\/pr-reviewed$/,
         (m) => markPrReviewed(decodeURIComponent(m[1])),
+      ],
+      [
+        /^\/work-items\/([^/]+)\/doc-review$/,
+        (m) => submitDocReview(decodeURIComponent(m[1]), form.reply ?? ""),
       ],
       [
         /^\/work-items\/([^/]+)\/failure-log$/,
