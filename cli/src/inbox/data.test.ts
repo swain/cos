@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ulid } from "ulid";
@@ -21,6 +21,7 @@ import {
   markPrReviewed,
   promoteIdea,
   dismissSession,
+  submitDocReview,
 } from "./actions.js";
 import { getDb, ideas, workItems, sessions } from "../db.js";
 import type { TriageVerdict } from "../types.js";
@@ -177,6 +178,88 @@ describe("review section — ideas verdict + blocked + pr-open", () => {
         (i) => i.id === id && i.kind === "blocked-item",
       ),
     ).toBe(true);
+  });
+});
+
+describe("review section — doc-review (worker output as local markdown)", () => {
+  it("emits a doc-review item for pr-open WIs whose pr_urls are all file://*.md", () => {
+    const docPath = join(tmp, "review-a.md");
+    writeFileSync(docPath, "# hello\n", "utf8");
+    const id = insertWi({
+      title: "doc worker",
+      status: "pr-open",
+      pr_urls: [`file://${docPath}`],
+    });
+    const d = collectDashboard();
+    const found = d.review.find((i) => i.id === id);
+    expect(found?.kind).toBe("doc-review");
+  });
+
+  it("does not emit doc-review when any pr_url is a GitHub URL", () => {
+    const docPath = join(tmp, "review-b.md");
+    writeFileSync(docPath, "# hello\n", "utf8");
+    const id = insertWi({
+      title: "mixed output",
+      status: "pr-open",
+      pr_urls: [
+        `file://${docPath}`,
+        "https://github.com/thegoodparty/x/pull/1",
+      ],
+    });
+    const d = collectDashboard();
+    // The github URL wins — this surfaces as pr-review, not doc-review.
+    expect(d.review.some((i) => i.id === id && i.kind === "doc-review")).toBe(
+      false,
+    );
+  });
+
+  it("hides doc-review items after inbox_acked_at is set", async () => {
+    const docPath = join(tmp, "review-c.md");
+    writeFileSync(docPath, "# hello\n", "utf8");
+    const id = insertWi({
+      title: "to be acked",
+      status: "pr-open",
+      pr_urls: [`file://${docPath}`],
+    });
+    expect(collectDashboard().review.some((i) => i.id === id)).toBe(true);
+    await submitDocReview(id, "");
+    expect(collectDashboard().review.some((i) => i.id === id)).toBe(false);
+  });
+
+  it("submitDocReview with a reply appends '## Review feedback' + marks WI done", async () => {
+    const docPath = join(tmp, "review-d.md");
+    writeFileSync(docPath, "# original\n", "utf8");
+    const id = insertWi({
+      title: "reply flow",
+      status: "pr-open",
+      pr_urls: [`file://${docPath}`],
+    });
+    const r = await submitDocReview(id, "please tighten section 3");
+    expect(r.ok).toBe(true);
+    const content = readFileSync(docPath, "utf8");
+    expect(content).toMatch(/^# original\n/);
+    expect(content).toMatch(/## Review feedback — \d{4}-\d{2}-\d{2}T/);
+    expect(content).toMatch(/please tighten section 3/);
+    const wi = workItems.get(id);
+    expect(wi?.status).toBe("done");
+    expect(wi?.inbox_acked_at).toBeTruthy();
+  });
+
+  it("submitDocReview with empty reply acks + moves to done without touching the doc", async () => {
+    const docPath = join(tmp, "review-e.md");
+    writeFileSync(docPath, "# untouched\n", "utf8");
+    const id = insertWi({
+      title: "ack only",
+      status: "pr-open",
+      pr_urls: [`file://${docPath}`],
+    });
+    const before = readFileSync(docPath, "utf8");
+    const r = await submitDocReview(id, "   \n  ");
+    expect(r.ok).toBe(true);
+    expect(readFileSync(docPath, "utf8")).toBe(before);
+    const wi = workItems.get(id);
+    expect(wi?.status).toBe("done");
+    expect(wi?.inbox_acked_at).toBeTruthy();
   });
 });
 

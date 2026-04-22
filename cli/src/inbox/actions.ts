@@ -160,6 +160,61 @@ export const markPrReviewed = async (id: string): Promise<ActionResult> => {
   return { ok: true, message: `marked ${displayWorkItemId(wi)} reviewed` };
 };
 
+// Doc-review: worker output landed as a local markdown file (file:// pr_url)
+// rather than a GitHub PR. Reviewing it from the dashboard does three things:
+//   1. If `reply` is non-empty, append a timestamped "## Review feedback" block
+//      to the doc so the worker sees it on pickup.
+//   2. Mark the WI inbox_acked_at so the card drops off Review.
+//   3. Transition the WI to `done` (terminal lifecycle state — same destination
+//      as a merged PR, but via this non-GitHub path).
+export const submitDocReview = async (
+  id: string,
+  reply: string,
+): Promise<ActionResult> => {
+  const wi = workItems.resolve(id);
+  if (!wi) return { ok: false, message: `work item not found: ${id}` };
+  const docUrl = wi.pr_urls[0];
+  if (!docUrl || !docUrl.startsWith("file://")) {
+    return { ok: false, message: `no doc output on ${displayWorkItemId(wi)}` };
+  }
+  const docPath = docUrl.replace(/^file:\/\//, "");
+  const trimmed = reply.trim();
+  if (trimmed) {
+    if (!existsSync(docPath)) {
+      return { ok: false, message: `doc file not found: ${docPath}` };
+    }
+    const ts = new Date().toISOString();
+    try {
+      appendFileSync(
+        docPath,
+        `\n## Review feedback — ${ts}\n\n${trimmed}\n`,
+        "utf8",
+      );
+    } catch (e) {
+      return {
+        ok: false,
+        message: `failed to append to doc: ${String(e)}`,
+      };
+    }
+  }
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `UPDATE work_items
+         SET inbox_acked_at = datetime('now'),
+             status = 'done',
+             completed_at = ?
+       WHERE id = ?`,
+    )
+    .run(now, wi.id);
+  return {
+    ok: true,
+    message: trimmed
+      ? `doc review filed for ${displayWorkItemId(wi)}`
+      : `acked ${displayWorkItemId(wi)}`,
+  };
+};
+
 export const suppressSignal = async (id: string): Promise<ActionResult> => {
   const r = await runCos(["signal-triage", id, "suppress"]);
   return r.ok
