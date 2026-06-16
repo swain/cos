@@ -75,6 +75,7 @@ import {
   cmdCommitmentsAdd,
   cmdCommitmentsDone,
 } from "./commands/commitments.js";
+import { runBriefCollector } from "./collectors/brief.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -688,6 +689,19 @@ program
   .command("followup-mark-addressed <id>")
   .description("Mark a followup as addressed (dialog complete)")
   .action((id) => cmdFollowupMarkAddressed(id));
+
+program
+  .command("brief")
+  .description("Generate the morning brief (claude -p with morning-brief.md)")
+  .option("--timeout-ms <ms>", "subprocess timeout", "420000")
+  .action((o) => {
+    const r = runBriefCollector({ timeoutMs: Number(o.timeoutMs) });
+    if (!r.ran || (r.exitCode !== 0 && r.exitCode !== null)) {
+      console.error(r.reason ?? `brief exited ${r.exitCode}`);
+      process.exit(1);
+    }
+    if (r.reason) console.error(r.reason);
+  });
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);

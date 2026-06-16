@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# COS morning brief wrapper — invoked by launchd daily at 7:30am local.
+
+set -o pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
+
+# Load API tokens for collectors (Notion). chmod 600, local-only.
+if [[ -f "$HOME/.claude/cos/secrets.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$HOME/.claude/cos/secrets.env"
+  set +a
+fi
+
+# Pin to the user's nvm default (same Node their interactive shell uses).
+# Avoids the "rebuild against launchd's Node breaks CLI in your shell" footgun.
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  DEFAULT_ALIAS=""
+  if [[ -f "$HOME/.nvm/alias/default" ]]; then
+    DEFAULT_ALIAS=$(cat "$HOME/.nvm/alias/default")
+  fi
+  TARGET_NODE_DIR=""
+  if [[ -n "$DEFAULT_ALIAS" ]]; then
+    if [[ "$DEFAULT_ALIAS" =~ ^[0-9]+$ ]]; then
+      TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | grep "^v${DEFAULT_ALIAS}\." | sort -V | tail -1)
+    elif [[ "$DEFAULT_ALIAS" == v* ]]; then
+      TARGET_NODE_DIR="$DEFAULT_ALIAS"
+    else
+      TARGET_NODE_DIR="v$DEFAULT_ALIAS"
+    fi
+  fi
+  if [[ -z "$TARGET_NODE_DIR" || ! -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+  fi
+  if [[ -n "$TARGET_NODE_DIR" && -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    export PATH="$HOME/.nvm/versions/node/$TARGET_NODE_DIR/bin:$PATH"
+  fi
+fi
+
+LOGDIR="$HOME/.claude/cos/logs"
+mkdir -p "$LOGDIR"
+LOG="$LOGDIR/brief-$(date +%Y-%m-%d).log"
+
+{
+  echo "=================================================="
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] brief start"
+  cos brief --timeout-ms 420000
+  RC=$?
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] brief end rc=$RC"
+} >> "$LOG" 2>&1
+
+exit ${RC:-1}

@@ -12,11 +12,13 @@ COMMANDS_DIR="$CLAUDE_DIR/commands"
 LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 LABEL="${COS_LAUNCHD_LABEL:-com.$(whoami).cos.cron}"
 CALENDAR_LABEL="${COS_CALENDAR_LAUNCHD_LABEL:-com.$(whoami).cos.calendar}"
+BRIEF_LABEL="${COS_BRIEF_LAUNCHD_LABEL:-com.$(whoami).cos.brief}"
 
 echo "==> COS install from: $REPO_ROOT"
 echo "    target:          $CLAUDE_DIR"
 echo "    cron label:      $LABEL"
 echo "    calendar label:  $CALENDAR_LABEL"
+echo "    brief label:     $BRIEF_LABEL"
 echo
 
 # ----- Prereqs -----
@@ -138,6 +140,14 @@ sed \
   "$REPO_ROOT/launchd/com.cos.calendar.plist.template" > "$CALENDAR_PLIST_OUT"
 plutil -lint "$CALENDAR_PLIST_OUT" >/dev/null && echo "    $CALENDAR_PLIST_OUT (valid plist)"
 
+echo "==> Rendering launchd plist as ${BRIEF_LABEL}…"
+BRIEF_PLIST_OUT="$LAUNCHD_DIR/$BRIEF_LABEL.plist"
+sed \
+  -e "s|{{LABEL}}|$BRIEF_LABEL|g" \
+  -e "s|{{USER_HOME}}|$HOME|g" \
+  "$REPO_ROOT/launchd/com.cos.brief.plist.template" > "$BRIEF_PLIST_OUT"
+plutil -lint "$BRIEF_PLIST_OUT" >/dev/null && echo "    $BRIEF_PLIST_OUT (valid plist)"
+
 # ----- Bootstrap / reload launchd agents -----
 # Re-render above is inert until launchd picks up the new plist. Bootstrap if
 # missing; bootout+bootstrap+kickstart if already loaded so plist changes take
@@ -158,6 +168,7 @@ reload_agent() {
 
 reload_agent "$LABEL" "$PLIST_OUT"
 reload_agent "$CALENDAR_LABEL" "$CALENDAR_PLIST_OUT"
+reload_agent "$BRIEF_LABEL" "$BRIEF_PLIST_OUT"
 
 echo
 echo "✅ COS installed."
