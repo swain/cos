@@ -70,6 +70,11 @@ import {
   cmdPlanSubmit,
   cmdPlanSupersede,
 } from "./commands/plans.js";
+import {
+  cmdCommitmentsList,
+  cmdCommitmentsAdd,
+  cmdCommitmentsDone,
+} from "./commands/commitments.js";
 
 const program = new Command();
 program.name("cos").description("Chief of Staff CLI").version("0.1.0");
@@ -598,6 +603,30 @@ recurringCmd
   .command("disable <id>")
   .description("Disable a recurring task")
   .action((id) => cmdRecurringSetEnabled(id, false));
+
+const commitments = program
+  .command("commitments")
+  .description("Commitments ledger (who promised what, by when)");
+commitments
+  .command("list")
+  .option("--due <filter>", "today | overdue | all", "all")
+  .option("--format <fmt>", "text | json", "text")
+  .action((o) => cmdCommitmentsList({ due: o.due, format: o.format }));
+commitments
+  .command("add")
+  .requiredOption("--who <who>")
+  .requiredOption("--what <what>")
+  .option("--due <yyyy-mm-dd>")
+  .option("--source <src>")
+  .action((o) =>
+    cmdCommitmentsAdd({
+      who: o.who,
+      what: o.what,
+      due: o.due,
+      source: o.source,
+    }),
+  );
+commitments.command("done <id>").action((id) => cmdCommitmentsDone(id));
 
 program
   .command("review-week")
