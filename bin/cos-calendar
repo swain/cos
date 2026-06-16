@@ -9,6 +9,14 @@ set -o pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
 
+# Load API tokens for collectors (Notion). chmod 600, local-only.
+if [[ -f "$HOME/.claude/cos/secrets.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$HOME/.claude/cos/secrets.env"
+  set +a
+fi
+
 # Pin to the user's nvm default (same Node their interactive shell uses).
 # Avoids the "rebuild against launchd's Node breaks CLI in your shell" footgun.
 if [[ -d "$HOME/.nvm/versions/node" ]]; then
