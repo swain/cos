@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ulid } from "ulid";
 
-const tmp = mkdtempSync(join(tmpdir(), "cos-tick-test-"));
+const tmp = mkdtempSync(join(tmpdir(), "cos-sessions-test-"));
 process.env.COS_DB_PATH = join(tmp, "fleet.db");
 
-import { cmdSessionMarkStale } from "./tick.js";
+import { cmdSessionMarkStale } from "./sessions.js";
 import { sessions, cronTicks, getDb, ZOMBIE_SWEEP_RC } from "../db.js";
 
 afterAll(() => {

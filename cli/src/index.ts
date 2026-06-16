@@ -38,7 +38,7 @@ import {
   cmdNotifyMarkPushed,
   cmdNotifyPush,
 } from "./commands/notify.js";
-import { cmdTick, cmdSessionMarkStale } from "./commands/tick.js";
+import { cmdSessionMarkStale } from "./commands/sessions.js";
 import { cmdDoctor } from "./commands/doctor.js";
 import { cmdLogAppend } from "./commands/log.js";
 import { cmdInbox } from "./commands/inbox.js";
@@ -477,14 +477,6 @@ program
     "Generate ideas from ai-native evaluation docs (~/Repos/thegoodparty/ai-native-evaluation-*.md)",
   )
   .action(() => cmdGenerateAiNative());
-
-program
-  .command("tick")
-  .description("Run one cron tick (invokes claude -p)")
-  .option("--dry-run", "print prompt, do not invoke claude", false)
-  .action(async (opts) => {
-    await cmdTick({ dryRun: opts.dryRun });
-  });
 
 program
   .command("doctor")

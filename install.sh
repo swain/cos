@@ -10,13 +10,11 @@ CLAUDE_DIR="$HOME/.claude"
 COS_DIR="$CLAUDE_DIR/cos"
 COMMANDS_DIR="$CLAUDE_DIR/commands"
 LAUNCHD_DIR="$HOME/Library/LaunchAgents"
-LABEL="${COS_LAUNCHD_LABEL:-com.$(whoami).cos.cron}"
 CALENDAR_LABEL="${COS_CALENDAR_LAUNCHD_LABEL:-com.$(whoami).cos.calendar}"
 BRIEF_LABEL="${COS_BRIEF_LAUNCHD_LABEL:-com.$(whoami).cos.brief}"
 
 echo "==> COS install from: $REPO_ROOT"
 echo "    target:          $CLAUDE_DIR"
-echo "    cron label:      $LABEL"
 echo "    calendar label:  $CALENDAR_LABEL"
 echo "    brief label:     $BRIEF_LABEL"
 echo
@@ -124,14 +122,6 @@ echo "==> Running cos init…"
 
 # ----- Render launchd plists -----
 echo
-echo "==> Rendering launchd plist as ${LABEL}…"
-PLIST_OUT="$LAUNCHD_DIR/$LABEL.plist"
-sed \
-  -e "s|{{LABEL}}|$LABEL|g" \
-  -e "s|{{USER_HOME}}|$HOME|g" \
-  "$REPO_ROOT/launchd/com.cos.cron.plist.template" > "$PLIST_OUT"
-plutil -lint "$PLIST_OUT" >/dev/null && echo "    $PLIST_OUT (valid plist)"
-
 echo "==> Rendering launchd plist as ${CALENDAR_LABEL}…"
 CALENDAR_PLIST_OUT="$LAUNCHD_DIR/$CALENDAR_LABEL.plist"
 sed \
@@ -166,7 +156,6 @@ reload_agent() {
   fi
 }
 
-reload_agent "$LABEL" "$PLIST_OUT"
 reload_agent "$CALENDAR_LABEL" "$CALENDAR_PLIST_OUT"
 reload_agent "$BRIEF_LABEL" "$BRIEF_PLIST_OUT"
 
@@ -178,8 +167,6 @@ echo "  1) Fill in $COS_DIR/team.md and $COS_DIR/priorities.md with your real co
 echo "  2) Review $COS_DIR/arch.md and $COS_DIR/ai-native.md — customize to your stack."
 echo "  3) Update $COS_DIR/watched-repos.json with repos you want COS to monitor."
 echo "  4) Load the launchd agents:"
-echo "       launchctl bootstrap gui/\$(id -u) $PLIST_OUT"
-echo "       launchctl kickstart gui/\$(id -u)/$LABEL"
 echo "       launchctl bootstrap gui/\$(id -u) $CALENDAR_PLIST_OUT"
 echo "       launchctl kickstart gui/\$(id -u)/$CALENDAR_LABEL"
 echo "  5) To unpause auto-dispatch when you're ready:"
