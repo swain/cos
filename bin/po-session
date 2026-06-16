@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Launches the interactive Po session. Bound to a Warp Launch Configuration / Raycast hotkey.
+# Safe to run anytime — this is BOTH the morning start AND the recovery action for all three
+# death scenarios (closed tab / reboot / battery). All Po state lives in files, so a fresh
+# launch loses nothing durable. Pass --continue to resume the prior conversation instead.
+
+set -o pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.claude/cos/bin:$PATH"
+
+# Load API tokens for collectors (Notion). chmod 600, local-only.
+if [[ -f "$HOME/.claude/cos/secrets.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$HOME/.claude/cos/secrets.env"
+  set +a
+fi
+
+# Pin to the user's nvm default (same Node their interactive shell uses).
+# Avoids the "rebuild against launchd's Node breaks CLI in your shell" footgun.
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  DEFAULT_ALIAS=""
+  if [[ -f "$HOME/.nvm/alias/default" ]]; then
+    DEFAULT_ALIAS=$(cat "$HOME/.nvm/alias/default")
+  fi
+  TARGET_NODE_DIR=""
+  if [[ -n "$DEFAULT_ALIAS" ]]; then
+    if [[ "$DEFAULT_ALIAS" =~ ^[0-9]+$ ]]; then
+      TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | grep "^v${DEFAULT_ALIAS}\." | sort -V | tail -1)
+    elif [[ "$DEFAULT_ALIAS" == v* ]]; then
+      TARGET_NODE_DIR="$DEFAULT_ALIAS"
+    else
+      TARGET_NODE_DIR="v$DEFAULT_ALIAS"
+    fi
+  fi
+  if [[ -z "$TARGET_NODE_DIR" || ! -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    TARGET_NODE_DIR=$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+  fi
+  if [[ -n "$TARGET_NODE_DIR" && -d "$HOME/.nvm/versions/node/$TARGET_NODE_DIR" ]]; then
+    export PATH="$HOME/.nvm/versions/node/$TARGET_NODE_DIR/bin:$PATH"
+  fi
+fi
+
+LOCK="$HOME/.claude/cos/po.lock"
+# Refuse to start a second live Po (would double-extract + double-notify).
+# Self-heals a stale lock left by an unclean death (reboot/battery): if the PID is dead, proceed.
+if [[ -f "$LOCK" ]]; then
+  OLDPID=$(cat "$LOCK" 2>/dev/null)
+  if [[ -n "$OLDPID" ]] && kill -0 "$OLDPID" 2>/dev/null; then
+    echo "Po is already running (pid $OLDPID) in another tab."
+    echo "Focus that tab, or recover with:  kill $OLDPID && $0"
+    exit 1
+  fi
+  echo "(clearing stale Po lock from pid ${OLDPID:-unknown})"
+fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT INT TERM HUP
+
+PROMPT="$HOME/.claude/cos/prompts/po-session.md"
+PLUGIN_DIR="$HOME/Repos/claude-projects"
+
+if [[ "${1:-}" == "--continue" ]]; then
+  claude --plugin-dir "$PLUGIN_DIR" --continue "Re-read your state files and resume the monitoring loop. You may have been restarted."
+else
+  claude --plugin-dir "$PLUGIN_DIR" "$(cat "$PROMPT")"
+fi
