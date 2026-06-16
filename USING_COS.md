@@ -2,7 +2,11 @@
 
 **How to get the most value out of your Chief of Staff system.**
 
-COS is a persistent agent (runs on launchd every 15 min) + a persona + a work queue. This doc tells you how to talk to it and what to do with it day-to-day.
+COS (Po) is primarily an interactive session you open each morning and drop into all day, plus one headless 7:30am morning-brief job and a file-based commitments ledger. This doc tells you how to talk to it and what to do with it day-to-day.
+
+## Recovering Po (v2)
+
+Po is one interactive session. It dies only if you close its Warp tab, reboot, or the battery dies. Recovery in all three cases: **hit ⌥⌘P** (opens the "Po" Warp launch config → `~/.claude/cos/bin/po-session`). A fresh Po reads `commitments.md` / `briefs/` / `meetings/` and is instantly current — nothing is lost, because no durable state lives in the conversation. To resume the _prior conversation_ instead of starting fresh: `~/.claude/cos/bin/po-session --continue`. If the launcher says "Po already running," either focus that tab or `kill <pid> && ⌥⌘P`.
 
 ## The one thing to remember
 
