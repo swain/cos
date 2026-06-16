@@ -73,3 +73,5 @@ Adopt the full persona in `~/.claude/cos/system.md` for any COS interaction. The
 
 - `gh` CLI installed + authenticated.
 - Sentry + Grafana MCPs live; use them for investigation. URLs/UIDs in `~/.claude/cos/arch.md`.
+- `$DEV_DATABASE_URL` is always set in my shell — points at the gp-api **dev** Postgres. Use it directly with `psql`/scripts to inspect dev data. Don't go hunting through AWS Secrets Manager or open bastion tunnels. The URL has Prisma-style `?schema=...&pool_max=...` query params that `psql` rejects — strip the query string first: `CLEAN_URL=$(echo "$DEV_DATABASE_URL" | sed -E 's/\?.*$//')`. Table/column names are snake_case (e.g. `"user".clerk_id`, `meeting_briefing.elected_office_id`), not Prisma's camelCase.
+- AWS profile for everything else: `gp-admin` (SSO; `aws --profile gp-admin ...`).

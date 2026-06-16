@@ -44,7 +44,7 @@ import {
   viewFailureLog,
   type ActionResult,
 } from "../inbox/actions.js";
-import { plans } from "../db.js";
+import { plans, workItems } from "../db.js";
 import {
   SECTION_TITLES,
   type InboxDashboard,
@@ -123,9 +123,8 @@ const getPoBioHtml = (): string => {
 };
 
 // Meeting prep markdown → HTML. A little richer than renderBioMarkdown —
-// prep files use link syntax and fenced code blocks, which the bio does not.
-// Still intentionally minimal: no syntax highlighting, no tables, no raw
-// HTML pass-through.
+// prep files use link syntax, fenced code blocks, and GFM tables. Still
+// intentionally minimal: no syntax highlighting, no raw HTML pass-through.
 const renderPrepMarkdown = (md: string): string => {
   const lines = md.split(/\r?\n/);
   const out: string[] = [];
@@ -133,6 +132,7 @@ const renderPrepMarkdown = (md: string): string => {
   let inOrdered = false;
   let inCode = false;
   let codeBuf: string[] = [];
+  let codeIndent = 0;
   const closeList = () => {
     if (inList) {
       out.push("</ul>");
@@ -153,21 +153,42 @@ const renderPrepMarkdown = (md: string): string => {
         (_m, label, href) =>
           `<a href="${href}" target="_blank" rel="noopener">${label}</a>`,
       );
+  // Split a GFM table row into trimmed cells, dropping the empty cells that
+  // come from leading/trailing `|`.
+  const splitRow = (line: string): string[] => {
+    const cells = line
+      .trim()
+      .split("|")
+      .map((c) => c.trim());
+    if (cells.length && cells[0] === "") cells.shift();
+    if (cells.length && cells[cells.length - 1] === "") cells.pop();
+    return cells;
+  };
+  const isTableSeparator = (line: string): boolean =>
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
 
-  for (const line of lines) {
-    if (/^```/.test(line)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = /^(\s*)```/.exec(line);
+    if (fence) {
       if (inCode) {
         out.push(`<pre><code>${escapeHtml(codeBuf.join("\n"))}</code></pre>`);
         codeBuf = [];
         inCode = false;
+        codeIndent = 0;
       } else {
         closeList();
         inCode = true;
+        codeIndent = fence[1].length;
       }
       continue;
     }
     if (inCode) {
-      codeBuf.push(line);
+      const stripped =
+        codeIndent > 0 && line.startsWith(" ".repeat(codeIndent))
+          ? line.slice(codeIndent)
+          : line;
+      codeBuf.push(stripped);
       continue;
     }
     const h = /^(#{1,6})\s+(.+)$/.exec(line);
@@ -180,6 +201,39 @@ const renderPrepMarkdown = (md: string): string => {
     if (/^>\s?/.test(line)) {
       closeList();
       out.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    // GFM table: a pipe-bearing line immediately followed by a separator row
+    // like `|---|---|`. Consume the header, separator, and any contiguous
+    // row lines that still look like table rows.
+    if (
+      /^\s*\|?.*\|.*$/.test(line) &&
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      closeList();
+      const headers = splitRow(line);
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (
+        j < lines.length &&
+        lines[j].includes("|") &&
+        lines[j].trim() !== ""
+      ) {
+        rows.push(splitRow(lines[j]));
+        j++;
+      }
+      const thead = `<thead><tr>${headers
+        .map((c) => `<th>${inline(c)}</th>`)
+        .join("")}</tr></thead>`;
+      const tbody = `<tbody>${rows
+        .map(
+          (r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`,
+        )
+        .join("")}</tbody>`;
+      out.push(`<table>${thead}${tbody}</table>`);
+      i = j - 1;
       continue;
     }
     const ol = /^\d+\.\s+(.+)$/.exec(line);
@@ -760,133 +814,6 @@ body {
 }
 .nl-form button:hover { background: var(--accent-bg); }
 
-/* ----- Doc-review disclosure (worker-output markdown, reply + ack inline) ----- */
-.doc-review {
-  margin-top: 10px;
-  padding: 10px 14px;
-  background: var(--paper);
-  border: 1px dashed var(--rule-strong);
-  border-radius: 6px;
-}
-.doc-review > summary {
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  letter-spacing: 0.04em;
-}
-.doc-review > summary::-webkit-details-marker { display: none; }
-.doc-review > summary::before {
-  content: "▸";
-  font-size: 10px;
-  color: var(--muted);
-  transition: transform 0.12s ease-out;
-}
-.doc-review[open] > summary::before { transform: rotate(90deg); }
-.doc-review__label {
-  color: var(--accent);
-  text-transform: uppercase;
-  font-weight: 600;
-}
-.doc-review__path {
-  color: var(--muted-2);
-  word-break: break-all;
-  font-size: 10.5px;
-}
-.doc-review__body {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--rule);
-  color: var(--fg-soft);
-  font-size: 14px;
-  line-height: 1.6;
-  max-height: 520px;
-  overflow-y: auto;
-}
-.doc-review__body h1,
-.doc-review__body h2,
-.doc-review__body h3,
-.doc-review__body h4 {
-  font-family: var(--font-display);
-  color: var(--fg);
-  margin: 16px 0 8px;
-}
-.doc-review__body h1 { font-size: 22px; }
-.doc-review__body h2 { font-size: 18px; border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
-.doc-review__body h3 { font-size: 15.5px; }
-.doc-review__body p { margin: 0 0 10px; }
-.doc-review__body ul, .doc-review__body ol { margin: 0 0 12px; padding-left: 20px; }
-.doc-review__body li { margin-bottom: 6px; }
-.doc-review__body code {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  padding: 1px 5px;
-  background: var(--rule);
-  border-radius: 3px;
-  color: var(--fg);
-}
-.doc-review__body pre {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--rule);
-  padding: 10px 12px;
-  border-radius: 5px;
-  overflow-x: auto;
-  line-height: 1.5;
-}
-.doc-review__body pre code { padding: 0; background: transparent; font-size: inherit; }
-.doc-review__body blockquote {
-  margin: 10px 0;
-  padding: 2px 12px;
-  border-left: 2px solid var(--accent);
-  color: var(--fg);
-  font-style: italic;
-}
-.doc-review__body a { color: var(--accent); }
-.doc-review__body hr { border: 0; border-top: 1px solid var(--rule); margin: 16px 0; }
-.doc-review__missing {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--red);
-}
-.doc-review__reply {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--rule);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.doc-review__reply textarea {
-  width: 100%;
-  min-height: 80px;
-  padding: 8px 10px;
-  border: 1px solid var(--rule-strong);
-  border-radius: 4px;
-  background: var(--paper);
-  color: var(--fg);
-  font-family: var(--font-body);
-  font-size: 13px;
-  line-height: 1.5;
-  resize: vertical;
-}
-.doc-review__reply textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.doc-review__actions {
-  display: flex;
-  justify-content: flex-end;
-}
-.doc-review__ack {
-  margin-top: 8px;
-  display: flex;
-  justify-content: flex-end;
-}
 
 /* ----- Idea details disclosure ----- */
 .idea__rationale {
@@ -1296,11 +1223,16 @@ const renderReviewActions = (item: InboxItem, returnTo: string): string => {
         )
       );
     }
-    case "doc-review":
-      // All doc-review actions (expand, reply, ack) live inside the card body
-      // so they sit next to the rendered markdown. The top-of-card actions
-      // slot stays empty — nothing to click here.
-      return "";
+    case "doc-review": {
+      const openDoc = `<a class="btn btn--primary" href="/work-items/${id}/doc">Open doc</a>`;
+      const ack = btn(
+        `/work-items/${id}/doc-review`,
+        "ack only",
+        returnTo,
+        "btn btn--muted",
+      );
+      return openDoc + ack;
+    }
     case "blocked-item":
       return (
         btn(`/work-items/${id}/retry`, "retry", returnTo, "btn btn--primary") +
@@ -1391,43 +1323,6 @@ const renderIdeaBody = (item: InboxItem): string => {
   return `${rationale}<div class="idea__meta">${meta.join("")}</div>`;
 };
 
-// Doc-review disclosure: worker dropped a markdown file as output (file://
-// pr_url). Embed the rendered doc inline behind a `<details>` so the user can
-// read and reply without leaving the dashboard. Two sibling forms so "Ack
-// only" doesn't have to share a textarea with "Reply + Ack".
-const renderDocReviewDisclosure = (
-  item: InboxItem,
-  returnTo: string,
-): string => {
-  const id = encodeURIComponent(item.id);
-  const rtn = hiddenReturn(returnTo);
-  const docUrl = item.related_ids.find((u) => u.startsWith("file://")) ?? "";
-  if (!docUrl) return "";
-  const docPath = docUrl.replace(/^file:\/\//, "");
-  let docHtml = "";
-  try {
-    docHtml = renderPrepMarkdown(readFileSync(docPath, "utf8"));
-  } catch (e: any) {
-    docHtml = `<p class="doc-review__missing">Could not read <code>${escapeHtml(docPath)}</code>: ${escapeHtml(e?.message ?? "unknown error")}</p>`;
-  }
-  return `
-<details class="doc-review">
-  <summary><span class="doc-review__label">Open doc</span><span class="doc-review__path">${escapeHtml(docPath)}</span></summary>
-  <div class="doc-review__body">${docHtml}</div>
-  <form class="doc-review__reply" method="post" action="/work-items/${id}/doc-review">
-    ${rtn}
-    <textarea name="reply" placeholder="Reply (appended to the doc as a timestamped '## Review feedback' block)."></textarea>
-    <div class="doc-review__actions">
-      <button class="btn btn--primary" type="submit">Reply + Ack</button>
-    </div>
-  </form>
-  <form class="doc-review__ack" method="post" action="/work-items/${id}/doc-review">
-    ${rtn}
-    <button class="btn btn--muted" type="submit">Ack only (leave doc untouched)</button>
-  </form>
-</details>`;
-};
-
 const renderCard = (
   item: InboxItem,
   returnTo: string,
@@ -1445,7 +1340,6 @@ const renderCard = (
         .join("")
     : "";
   const isIdea = item.kind === "idea";
-  const isDocReview = item.kind === "doc-review";
   const bodyHtml = isIdea
     ? renderIdeaBody(item)
     : item.body
@@ -1457,12 +1351,8 @@ const renderCard = (
       : renderFyiActions(item, returnTo);
 
   const idLabel = item.displayLabel ?? item.id;
-  const docReviewBlock =
-    variant === "review" && isDocReview
-      ? renderDocReviewDisclosure(item, returnTo)
-      : "";
   const nlForm =
-    variant === "review" && !isDocReview
+    variant === "review"
       ? `<form class="nl-form" method="post" action="/inbox/rows/${encodeURIComponent(item.key)}/respond">
           ${hiddenReturn(returnTo)}
           <input type="text" name="text" placeholder="reply in plain English — enqueues a work item for Po">
@@ -1486,7 +1376,6 @@ const renderCard = (
     </div>
     <div class="actions">${actions}</div>
   </div>
-  ${docReviewBlock}
   ${nlForm}
 </article>`;
 };
@@ -2399,6 +2288,25 @@ body {
   line-height: 1.5;
 }
 .prep-section__body pre code { padding: 0; background: transparent; font-size: inherit; }
+.prep-section__body table {
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-size: 13.5px;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.prep-section__body th, .prep-section__body td {
+  border: 1px solid var(--rule);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.prep-section__body th {
+  background: var(--rule);
+  font-weight: 600;
+  color: var(--fg);
+}
 .prep-section__body blockquote {
   margin: 14px 0;
   padding: 2px 16px;
@@ -2527,6 +2435,295 @@ document.querySelector('.prep-feedback__textarea')?.addEventListener('keydown', 
   };
 };
 
+// Standalone doc-review page. Worker-generated markdown (file:// pr_url on a
+// pr-open work item) renders here as its own editorial column instead of
+// cramming into a `<details>` on the dashboard. Reply + Ack both POST to the
+// existing `/work-items/:id/doc-review` endpoint — on success the user lands
+// back on the dashboard anchored to the next review row.
+const renderDocPage = (
+  wiId: string,
+  opts: { filed?: boolean } = {},
+): { code: number; html: string } => {
+  const wi = workItems.resolve(wiId);
+  if (!wi) {
+    return {
+      code: 404,
+      html: `<!doctype html><meta charset=utf-8><title>Doc not found</title><p>No work item with id <code>${escapeHtml(wiId)}</code>.</p>`,
+    };
+  }
+  const docUrl = wi.pr_urls.find((u) => u.startsWith("file://")) ?? "";
+  if (!docUrl) {
+    return {
+      code: 404,
+      html: `<!doctype html><meta charset=utf-8><title>Doc not found</title><p>Work item <code>${escapeHtml(wi.id)}</code> has no file:// doc output.</p>`,
+    };
+  }
+  const docPath = docUrl.replace(/^file:\/\//, "");
+  let docHtml = "";
+  let missing = false;
+  try {
+    docHtml = renderPrepMarkdown(readFileSync(docPath, "utf8"));
+  } catch (e: any) {
+    missing = true;
+    docHtml = `<p class="prep-section__empty">Could not read <code>${escapeHtml(docPath)}</code>: ${escapeHtml(e?.message ?? "unknown error")}</p>`;
+  }
+
+  const encId = encodeURIComponent(wi.id);
+  const toast = opts.filed
+    ? `<div class="prep-toast" role="status">thanks — filed</div>`
+    : "";
+
+  return {
+    code: 200,
+    html: `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<title>${escapeHtml(wi.title)} — doc review</title>
+<style>${styles}
+body {
+  max-width: 780px;
+  padding-top: 32px;
+  padding-bottom: 160px;
+}
+.prep-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 28px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+}
+.prep-back:hover { color: var(--accent); }
+.prep-header { margin: 0 0 36px; }
+.prep-header__phase {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-bottom: 14px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.prep-header__title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 42px;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0;
+}
+.prep-header__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.02em;
+  margin: 14px 0 0;
+  word-break: break-all;
+}
+.prep-section { margin: 0 0 44px; }
+.prep-section__title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.prep-section__body { color: var(--fg-soft); font-size: 15.5px; line-height: 1.65; }
+.prep-section__body h1,
+.prep-section__body h2,
+.prep-section__body h3,
+.prep-section__body h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--fg);
+  margin: 22px 0 10px;
+}
+.prep-section__body h1 { font-size: 26px; }
+.prep-section__body h2 { font-size: 20px; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
+.prep-section__body h3 { font-size: 16.5px; margin: 18px 0 8px; }
+.prep-section__body p { margin: 0 0 12px; }
+.prep-section__body ul, .prep-section__body ol { margin: 0 0 14px; padding-left: 22px; }
+.prep-section__body li { margin-bottom: 8px; }
+.prep-section__body li > p { margin: 0; }
+.prep-section__body strong { color: var(--fg); }
+.prep-section__body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.prep-section__body a:hover { border-bottom-color: var(--accent); }
+.prep-section__body code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 5px;
+  background: var(--rule);
+  border-radius: 3px;
+  color: var(--fg);
+}
+.prep-section__body pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--rule);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.prep-section__body pre code { padding: 0; background: transparent; font-size: inherit; }
+.prep-section__body table {
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-size: 13.5px;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.prep-section__body th, .prep-section__body td {
+  border: 1px solid var(--rule);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.prep-section__body th {
+  background: var(--rule);
+  font-weight: 600;
+  color: var(--fg);
+}
+.prep-section__body blockquote {
+  margin: 14px 0;
+  padding: 2px 16px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.prep-section__body hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
+.prep-section__empty {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-2);
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+.prep-feedback__form { display: flex; flex-direction: column; gap: 12px; }
+.prep-feedback__textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.prep-feedback__textarea::placeholder { color: var(--muted-2); }
+.prep-feedback__textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.prep-feedback__row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.prep-feedback__hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.03em;
+}
+.prep-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  background: var(--fg);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  animation: prep-toast 4s ease forwards;
+}
+@keyframes prep-toast {
+  0%   { opacity: 0; transform: translate(-50%, -6px); }
+  10%  { opacity: 1; transform: translate(-50%, 0); }
+  80%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
+}
+.doc-ack-form { margin-top: 12px; display: flex; justify-content: flex-end; }
+</style>
+</head>
+<body>
+${toast}
+<a class="prep-back" href="/">← Inbox</a>
+
+<header class="prep-header">
+<span class="prep-header__phase">Doc review</span>
+<h1 class="prep-header__title">${escapeHtml(wi.title)}</h1>
+<p class="prep-header__meta">${escapeHtml(docPath)}</p>
+</header>
+
+<section class="prep-section">
+<h2 class="prep-section__title">Document</h2>
+<div class="prep-section__body">${docHtml || '<p class="prep-section__empty">—</p>'}</div>
+</section>
+
+${
+  missing
+    ? ""
+    : `<section class="prep-section prep-feedback">
+<h2 class="prep-section__title">Feedback</h2>
+<form class="prep-feedback__form" method="post" action="/work-items/${encId}/doc-review">
+<input type="hidden" name="returnTo" value="/work-items/${encId}/doc?filed=1">
+<textarea class="prep-feedback__textarea" name="reply" placeholder="Reply (appended to the doc as a timestamped '## Review feedback' block). Leave empty and submit to ack without changes."></textarea>
+<div class="prep-feedback__row">
+<span class="prep-feedback__hint">Cmd+Enter to submit.</span>
+<button class="btn btn--primary" type="submit">Reply + Ack</button>
+</div>
+</form>
+<form class="doc-ack-form" method="post" action="/work-items/${encId}/doc-review">
+<input type="hidden" name="returnTo" value="/">
+<button class="btn btn--muted" type="submit">Ack only (leave doc untouched)</button>
+</form>
+</section>`
+}
+
+<script>
+document.querySelector('.prep-feedback__textarea')?.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    e.target.closest('form').submit();
+  }
+});
+</script>
+</body>
+</html>`,
+  };
+};
+
 const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const method = req.method ?? "GET";
   const url = req.url ?? "/";
@@ -2556,6 +2753,16 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       const eventId = decodeURIComponent(prepGet[1]);
       const filed = /[?&]filed=1(?:&|$)/.test(url);
       const page = renderPrepPage(eventId, { filed });
+      res.writeHead(page.code, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(page.html);
+      return;
+    }
+    const docGet =
+      method === "GET" && path.match(/^\/work-items\/([^/]+)\/doc$/);
+    if (docGet) {
+      const wiId = decodeURIComponent(docGet[1]);
+      const filed = /[?&]filed=1(?:&|$)/.test(url);
+      const page = renderDocPage(wiId, { filed });
       res.writeHead(page.code, { "Content-Type": "text/html; charset=utf-8" });
       res.end(page.html);
       return;
