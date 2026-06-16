@@ -41,11 +41,12 @@ export const cmdCommitmentsAdd = (opts: {
   source?: string;
 }) => {
   const items = loadLedger();
+  const who = opts.who.replace(/\|/g, "/").trim().toLowerCase();
+  const what = opts.what.replace(/\|/g, "/").trim();
+  const source = opts.source ? opts.source.replace(/\|/g, "/").trim() : null;
   const dup = items.find(
     (c) =>
-      !c.done &&
-      c.who === opts.who.toLowerCase() &&
-      c.what.toLowerCase() === opts.what.toLowerCase(),
+      !c.done && c.who === who && c.what.toLowerCase() === what.toLowerCase(),
   );
   if (dup) {
     console.log(chalk.yellow("duplicate of"), dup.id, chalk.gray("— skipped"));
@@ -53,10 +54,10 @@ export const cmdCommitmentsAdd = (opts: {
   }
   const c: Commitment = {
     id: newCommitmentId(),
-    who: opts.who.toLowerCase(),
-    what: opts.what,
+    who,
+    what,
     due: opts.due ?? null,
-    source: opts.source ?? null,
+    source,
     added: today(),
     done: false,
   };
