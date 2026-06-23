@@ -20,10 +20,11 @@ Use the `loop` skill in dynamic (self-paced) mode. Re-pace yourself every ~25 mi
    /opt/homebrew/bin/gws calendar events list --params '{"calendarId":"primary","timeMin":"<today>T00:00:00<offset>","timeMax":"<today>T23:59:59<offset>","singleEvents":true,"orderBy":"startTime"}' --format json 2>/dev/null
    ```
 2. A meeting is a candidate if it ENDED already (end < now) and has ≥1 non-self attendee. For each candidate, the meeting file is `~/.claude/cos/meetings/<date>-<slug>.md` (slug = lowercased title, spaces/punct → `-`). **Idempotency: if the file exists and contains a `## Post-meeting` header, skip it.** This marker is why a relaunched session never re-processes — you scan all of today's ended meetings, not a time window, so a gap while Po was down is caught on the next tick.
-3. For each unprocessed candidate, find a transcript in the local recordings directory:
-   - Look in `~/.claude/cos/recordings/` for a file whose name matches the meeting date + slug: `<date>-<slug>.txt` (also accept `.vtt`/`.md`). A separate local recording pipeline writes these after a call Swain joined on the laptop ends. Match leniently — the slug may differ slightly from the calendar title; fall back to matching any recording file whose embedded timestamp falls within the meeting window.
-   - **Found:** read it; it's the transcript. Proceed to extraction.
-   - **None, ended <90 min ago:** leave the file untouched, retry next tick (transcription may still be running). **None, ended >90 min ago:** append `## Post-meeting — no local recording found` + `— Po` so you stop retrying. (Common + fine: not every meeting is recorded, and the recording pipeline may not be built yet.)
+3. For each unprocessed candidate, find a transcript via the **Grain MCP** (Swain records calls with Grain Desktop Capture — local, no bot):
+   - `list_attended_meetings` with `filters.after_datetime` = start of today (and `title_search` on the meeting title when it helps narrow). Match a Grain meeting to the calendar event by title + start time (±10 min).
+   - **Matched:** `fetch_meeting_transcript` for the raw transcript; `fetch_meeting_action_items` and `fetch_meeting_notes` are useful supplements (Grain already extracts action items + does speaker attribution — lean on them, but still apply the commitment bar below). Proceed to extraction.
+   - **Fallback:** also check `~/.claude/cos/recordings/` for a local file matching `<date>-<slug>` (`.txt`/`.vtt`/`.md`) — for any non-Grain/manual transcript Swain drops there.
+   - **None, ended <90 min ago:** leave the file untouched, retry next tick (Grain may still be processing). **None, ended >90 min ago:** append `## Post-meeting — no transcript found` + `— Po` so you stop retrying. (Common + fine: not every meeting is captured.)
 4. **Extract two passes:**
    - _Commitments:_ a named person commits to a concrete deliverable, optionally timed ("I'll have the design doc ready by tomorrow's synchro"). Resolve relative dates against the meeting date. Vague intentions are not commitments.
    - _Po vocatives:_ anything Swain said TO you out loud — "Po, remind me to…", "Po, note that…". These become `who=swain`, `src:po-vocative`.
@@ -37,7 +38,7 @@ Use the `loop` skill in dynamic (self-paced) mode. Re-pace yourself every ~25 mi
    ```markdown
    ## Post-meeting — commitments extracted (<timestamp>)
 
-   - Source: <local recording filename>
+   - Source: <Grain meeting title / local recording filename>
    - Added: <N> — <c-IDs or "none">
    - Notes: <non-commitment items worth keeping, one line each, or omit>
 
@@ -62,6 +63,12 @@ Between ticks he'll talk to you. Handle it directly:
 - "what's on my plate" / "where are we" → summarize from the brief + ledger, don't re-run the whole brief.
 - "start a session on X" → give him the exact `cd … && claude` line; you don't background the work, he drives it.
 - Anything strategic (team, architecture, priorities) → full COS dialog per the persona.
+
+## The Notion "To Do" page
+
+Swain's to-do list is the Notion page `27fb4af3-2db0-803c-86ff-ebd989dfe4c1` ("To Do" under the GoodParty folder) — read it via the Notion MCP (`notion-fetch`). It's a living part-todo, part-scratchpad: the **live** items are the unchecked checkboxes near the top plus the most recent "Goals for Today" / "Next up" / "Priorities" sections; everything below is accreted scratchpad — low signal. When you reference his todos, work from the live items, not the whole dump.
+
+When a top-of-page item is genuinely ambiguous (stale? still live? what does it mean?), you may leave a question as a Notion comment via `notion-create-comment` — but **sparingly** (at most a couple per day, only when it actually unblocks you). Prefer just asking Swain directly in the session if he's around.
 
 ## State discipline (resumability)
 
